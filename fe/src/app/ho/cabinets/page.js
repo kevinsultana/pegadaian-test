@@ -363,45 +363,42 @@ function CabinetsListContent() {
             <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs self-start">
               <button
                 onClick={() => setFilterStatus('ALL')}
-                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
-                  filterStatus === 'ALL'
+                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${filterStatus === 'ALL'
                     ? 'bg-white text-slate-900 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Semua Lemari ({cabinets.length})
               </button>
               <button
                 onClick={() => setFilterStatus('OCCUPIED')}
-                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
-                  filterStatus === 'OCCUPIED'
+                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${filterStatus === 'OCCUPIED'
                     ? 'bg-white text-amber-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Terisi ({occupiedCabinetsCount})
               </button>
               <button
                 onClick={() => setFilterStatus('EMPTY')}
-                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${
-                  filterStatus === 'EMPTY'
+                className={`px-3.5 py-1.5 rounded-lg font-semibold transition-all ${filterStatus === 'EMPTY'
                     ? 'bg-white text-slate-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Kosong ({emptyCabinetsCount})
               </button>
             </div>
 
             {/* Search Input */}
-            <div className="w-full md:w-80 bg-white border border-slate-300 rounded-xl px-3.5 py-2 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-500 focus-within:border-emerald-700 transition-all">
+            <div className="w-full md:w-80 bg-white border border-slate-300 rounded-xl px-3.5 py-2 flex items-center gap-2 focus-within:ring-2 focus-within:ring-emerald-500 transition-all">
               <Search className="w-4 h-4 text-slate-400" />
               <input
                 type="text"
                 placeholder="Cari nomor atau nama lemari..."
                 value={cabinetSearch}
                 onChange={(e) => setCabinetSearch(e.target.value)}
-                className="w-full bg-transparent text-xs text-slate-900 focus:outline-none placeholder:text-slate-400"
+                className="w-full bg-transparent text-xs text-slate-900 focus:outline-none"
               />
               {cabinetSearch && (
                 <button
@@ -657,7 +654,7 @@ function CabinetsListContent() {
                         formData: { ...createCabinetModal.formData, code: e.target.value.toUpperCase() },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                   <span className="text-[10px] text-slate-400 mt-0.5 block">Format standar: HO-CAB-XX</span>
                 </div>
@@ -675,7 +672,7 @@ function CabinetsListContent() {
                         formData: { ...createCabinetModal.formData, name: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -691,7 +688,7 @@ function CabinetsListContent() {
                         formData: { ...createCabinetModal.formData, description: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -705,7 +702,7 @@ function CabinetsListContent() {
                         formData: { ...createCabinetModal.formData, modularSetup: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
                     <option value="DEFAULT">4 Laci Besar (Slot 1-4) & 4 Laci Kecil (Slot 5-8) - Rekomendasi</option>
                     <option value="ALL_BIG">Semua 8 Slot Laci Besar (8 Laci Besar)</option>
@@ -790,7 +787,7 @@ function CabinetsListContent() {
                         formData: { ...editCabinetModal.formData, name: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -805,7 +802,7 @@ function CabinetsListContent() {
                         formData: { ...editCabinetModal.formData, description: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700 resize-none"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
                   />
                 </div>
 

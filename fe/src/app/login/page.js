@@ -111,7 +111,7 @@ export default function LoginPage() {
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   placeholder="Masukkan username"
-                  className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl placeholder-slate-400 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700 transition-colors"
+                  className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-colors"
                 />
               </div>
             </div>
@@ -130,7 +130,7 @@ export default function LoginPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Masukkan password"
-                  className="w-full pl-11 pr-11 py-3 bg-white border border-slate-300 rounded-xl placeholder-slate-400 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700 transition-colors"
+                  className="w-full pl-11 pr-11 py-3 bg-white border border-slate-300 rounded-xl placeholder-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-colors"
                 />
                 <button
                   type="button"
@@ -174,11 +174,10 @@ export default function LoginPage() {
                   key={p.u}
                   type="button"
                   onClick={() => selectPreset(p.u)}
-                  className={`w-full text-left p-2.5 rounded-xl border text-xs transition-colors flex items-center justify-between ${
-                    username === p.u
+                  className={`w-full text-left p-2.5 rounded-xl border text-xs transition-colors flex items-center justify-between ${username === p.u
                       ? 'bg-emerald-50/80 border-emerald-300 text-slate-900'
                       : 'bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-700'
-                  }`}
+                    }`}
                 >
                   <div>
                     <div className="font-semibold text-slate-900">{p.label}</div>
