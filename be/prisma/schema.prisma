@@ -1,0 +1,251 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -------------------------------------------------------------
+// ENUMS
+// -------------------------------------------------------------
+
+enum LocationType {
+  HEAD_OFFICE
+  OUTLET_HUB
+}
+
+enum Role {
+  SUPER_ADMIN
+  HO_SUPERVISOR
+  HO_STAFF
+  HO_LOGISTICS
+  OUTLET_SUPERVISOR
+  OUTLET_STAFF
+  OUTLET_PETUGAS
+  SPI_AUDITOR
+}
+
+enum SlotModularType {
+  BIG_DRAWER       // 1 Laci Besar
+  SMALL_CLUSTER    // 8 Laci Kecil
+}
+
+enum ItemStatus {
+  IN_HO            // Tersimpan di Lemari HO
+  ALLOCATED_PO     // Terkunci dalam proses PO / Picking
+  IN_TRANSIT       // Sedang dikirim ke Outlet
+  IN_OUTLET        // Tersimpan di Vault Outlet
+  DITEBUS_NASABAH  // Telah ditebus nasabah
+  RELOKASI_KELUAR  // Direlokasi ke unit lain
+  SOLD             // Terjual / Eksekusi Lelang
+}
+
+enum POStatus {
+  REQUESTED        // Diajukan oleh Outlet
+  APPROVED         // Disetujui HO Supervisor
+  PICKING          // Sedang diambil dari lemari HO (QR scan)
+  DISPATCHED       // Dalam perjalanan pengiriman
+  RECEIVED         // Diterima & di-tag RFID di Outlet
+  REJECTED         // Ditolak
+}
+
+// -------------------------------------------------------------
+// MASTER LOKASI & PENGGUNA
+// -------------------------------------------------------------
+
+model Location {
+  id           String          @id @default(uuid())
+  code         String          @unique // e.g. "HO-CENTRAL", "OUTLET-KRAMAT"
+  name         String
+  type         LocationType
+  address      String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  users        User[]
+  cabinets     Cabinet[]
+  posFrom      PurchaseOrder[] @relation("SourceLocation")
+  posTo        PurchaseOrder[] @relation("DestLocation")
+
+  @@map("locations")
+}
+
+model User {
+  id           String       @id @default(uuid())
+  username     String       @unique
+  passwordHash String
+  fullName     String
+  role         Role
+  locationId   String
+  location     Location     @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  isActive     Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@map("users")
+}
+
+model RoleMaster {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+  permissions String[]
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("role_masters")
+}
+
+// -------------------------------------------------------------
+// MASTER STRUKTUR FISIK VAULT (LEMARI, SLOT, LACI)
+// -------------------------------------------------------------
+
+model Cabinet {
+  id           String          @id @default(uuid())
+  code         String          @unique // e.g. "HO-CAB-01" s/d "HO-CAB-32"
+  name         String
+  locationId   String
+  location     Location        @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  qrCode       String          @unique // e.g. "QR-CAB-HO-01"
+  totalSlots   Int             @default(8)
+  description  String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  slots        CabinetSlot[]
+
+  @@map("cabinets")
+}
+
+model CabinetSlot {
+  id           String          @id @default(uuid())
+  slotNumber   Int             // 1 s/d 8
+  cabinetId    String
+  cabinet      Cabinet         @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  modularType  SlotModularType @default(BIG_DRAWER)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  drawers      Drawer[]
+
+  @@unique([cabinetId, slotNumber])
+  @@map("cabinet_slots")
+}
+
+model Drawer {
+  id           String       @id @default(uuid())
+  code         String       @unique // e.g. "HO-CAB01-SL01-DRW-B01"
+  name         String
+  slotId       String
+  slot         CabinetSlot  @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  qrCode       String?      @unique // QR Code Laci di HO
+  rfidAntenna  String?      // ID Antena RFID di Outlet
+  category     String?      // e.g. "ANTAM & UBS >= 10g"
+  capacity     Int          @default(12)
+  rows         Int          @default(3)
+  cols         Int          @default(4)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  items        Item[]
+
+  @@map("drawers")
+}
+
+// -------------------------------------------------------------
+// INVENTORI KEPING EMAS & HISTORY LIFECYCLE
+// -------------------------------------------------------------
+
+model Item {
+  id              String        @id // Serial number unik e.g. "E0040001"
+  qrCode          String        @unique // Payload QR Code dicetak di HO
+  rfidTag         String?       @unique // EPC RFID Tag (saat di Outlet)
+  brand           String        // "ANTAM", "UBS", "Galeri24"
+  weight          Float         // Berat bersih dalam gram
+  purity          String        @default("999.9")
+  sbgNumber       String?       // Nomor Surat Bukti Gadai (jika ada)
+  currentStatus   ItemStatus    @default(IN_HO)
+  drawerId        String?
+  drawer          Drawer?       @relation(fields: [drawerId], references: [id], onDelete: SetNull)
+  slotPosition    String?       // Posisi slot eksplisit e.g. "SLOT-01"
+  customerName    String?
+  customerNik     String?
+  customerPhone   String?
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  histories       ItemHistory[]
+  poItems         POItem[]
+
+  @@map("items")
+}
+
+model ItemHistory {
+  id              String       @id @default(uuid())
+  itemId          String
+  item            Item         @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  timestamp       DateTime     @default(now())
+  event           String       // "HO_INBOUND", "HO_PICKING", "DISPATCHED", "OUTLET_RECEIVED", etc.
+  actor           String
+  locationCode    String
+  details         String
+
+  @@map("item_histories")
+}
+
+// -------------------------------------------------------------
+// DISTRIBUSI & PURCHASE ORDER (HO <-> OUTLET)
+// -------------------------------------------------------------
+
+model PurchaseOrder {
+  id              String        @id // e.g. "PO-202611-0001"
+  sourceLocId     String
+  sourceLocation  Location      @relation("SourceLocation", fields: [sourceLocId], references: [id], onDelete: Restrict)
+  destLocId       String
+  destLocation    Location      @relation("DestLocation", fields: [destLocId], references: [id], onDelete: Restrict)
+  status          POStatus      @default(REQUESTED)
+  notes           String?
+  trackingNumber  String?       // Nomor Resi / Surat Jalan
+  requestedBy     String
+  approvedBy      String?
+  dispatchedBy    String?
+  receivedBy      String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  items           POItem[]
+
+  @@map("purchase_orders")
+}
+
+model POItem {
+  id              String        @id @default(uuid())
+  poId            String
+  po              PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  @@unique([poId, itemId])
+  @@map("po_items")
+}
+
+// -------------------------------------------------------------
+// AUDIT TRAIL LOGGING
+// -------------------------------------------------------------
+
+model AuditTrail {
+  id              String        @id @default(uuid())
+  timestamp       DateTime      @default(now())
+  action          String
+  actor           String
+  locationCode    String
+  details         String
+  ipAddress       String?
+
+  @@map("audit_trails")
+}
