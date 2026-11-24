@@ -138,17 +138,23 @@ const getCabinetByCode = async (req, res, next) => {
       return sendError(res, `Lemari dengan kode atau ID ${code} tidak ditemukan`, 404);
     }
 
-    // Compute metrics and attach drawer counts
+    // Compute metrics, drawer counts, and QR Data URLs for slots and drawers
     let totalCapacity = 0;
     let totalOccupied = 0;
-    cabinet.slots.forEach((slot) => {
-      slot.drawers.forEach((drw) => {
+    for (const slot of cabinet.slots) {
+      const slotPayload = `PGD-HO-SLOT:${cabinet.code}-SL${String(slot.slotNumber).padStart(2, '0')}`;
+      slot.qrCode = `QR-${cabinet.code}-SL${String(slot.slotNumber).padStart(2, '0')}`;
+      slot.qrDataUrl = await generateQrDataUrl(slotPayload);
+
+      for (const drw of slot.drawers) {
         totalCapacity += drw.capacity;
         const itemCount = drw.items ? drw.items.length : 0;
         totalOccupied += itemCount;
         drw._count = { items: itemCount };
-      });
-    });
+        const drwQrPayload = drw.qrCode || buildDrawerQrPayload(drw.code);
+        drw.qrDataUrl = await generateQrDataUrl(drwQrPayload);
+      }
+    }
 
     const metrics = {
       totalCapacity,

@@ -43,12 +43,17 @@ enum ItemStatus {
 }
 
 enum POStatus {
-  REQUESTED        // Diajukan oleh Outlet
-  APPROVED         // Disetujui HO Supervisor
-  PICKING          // Sedang diambil dari lemari HO (QR scan)
-  DISPATCHED       // Dalam perjalanan pengiriman
-  RECEIVED         // Diterima & di-tag RFID di Outlet
-  REJECTED         // Ditolak
+  DRAFT                // Dibuat oleh Outlet Staff (belum disubmit)
+  PENDING_OUTLET_SPV   // Menunggu persetujuan Supervisor Outlet
+  SUBMITTED_TO_HO      // Dikirim ke HO, menunggu review HO
+  APPROVED_HO          // Disetujui HO Supervisor
+  PICKING              // Sedang dipilih dari lemari HO (QR scan)
+  PARTIAL_HOLD         // Sebagian dikirim, sebagian masih pending
+  DISPATCHED           // Dalam perjalanan pengiriman
+  RECEIVED             // Diterima di Outlet
+  REJECTED             // Ditolak
+  REQUESTED            // Legacy - Gunakan SUBMITTED_TO_HO
+  APPROVED             // Legacy - Gunakan APPROVED_HO
 }
 
 // -------------------------------------------------------------
@@ -203,24 +208,45 @@ model ItemHistory {
 // -------------------------------------------------------------
 
 model PurchaseOrder {
-  id              String        @id // e.g. "PO-202611-0001"
-  sourceLocId     String
-  sourceLocation  Location      @relation("SourceLocation", fields: [sourceLocId], references: [id], onDelete: Restrict)
-  destLocId       String
-  destLocation    Location      @relation("DestLocation", fields: [destLocId], references: [id], onDelete: Restrict)
-  status          POStatus      @default(REQUESTED)
-  notes           String?
-  trackingNumber  String?       // Nomor Resi / Surat Jalan
-  requestedBy     String
-  approvedBy      String?
-  dispatchedBy    String?
-  receivedBy      String?
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  id                   String        @id // e.g. "PO-202611-0001"
+  sourceLocId          String
+  sourceLocation       Location      @relation("SourceLocation", fields: [sourceLocId], references: [id], onDelete: Restrict)
+  destLocId            String
+  destLocation         Location      @relation("DestLocation", fields: [destLocId], references: [id], onDelete: Restrict)
+  status               POStatus      @default(DRAFT)
+  notes                String?
+  trackingNumber       String?       // Nomor Resi / Surat Jalan
+  requestedBy          String        // username outlet staff
+  approvedBy           String?       // Legacy - kept for backward compat
+  outletApprovedBy     String?       // username outlet supervisor
+  hoApprovedBy         String?       // username HO supervisor
+  dispatchedBy         String?       // username HO logistics/staff yang dispatch
+  receivedBy           String?       // username outlet staff yang terima
+  kurirName            String?       // Nama kurir pengiriman
+  vehicleNumber        String?       // Nomor kendaraan
+  pickerName           String?       // Nama petugas HO yang picking
+  partialDispatchNote  String?       // Catatan partial dispatch
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
-  items           POItem[]
+  requestLines         PORequestLine[]
+  items                POItem[]
 
   @@map("purchase_orders")
+}
+
+model PORequestLine {
+  id            String        @id @default(uuid())
+  poId          String
+  po            PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+  goldBrand     String        // "ANTAM", "UBS", "GALERI24", etc.
+  weightGrams   Float         // 5, 10, 25, 50, 100
+  qtyRequested  Int
+  qtyFulfilled  Int           @default(0)
+  notes         String?
+  createdAt     DateTime      @default(now())
+
+  @@map("po_request_lines")
 }
 
 model POItem {

@@ -43,6 +43,19 @@ function CabinetDetailContent() {
     cabinet: null,
   });
 
+  // Drawer QR Print Modal State
+  const [drawerQrModal, setDrawerQrModal] = useState({
+    isOpen: false,
+    drawer: null,
+    slot: null,
+  });
+
+  // Slot QR Print Modal State
+  const [slotQrModal, setSlotQrModal] = useState({
+    isOpen: false,
+    slot: null,
+  });
+
   // Item QR Print Modal State
   const [itemQrModal, setItemQrModal] = useState({
     isOpen: false,
@@ -527,7 +540,7 @@ function CabinetDetailContent() {
                     <span>&bull;</span>
                     <span>Total Terisi: <strong className="text-emerald-700">{cabinet.metrics?.totalOccupied ?? cabinet.totalOccupied ?? 0}</strong> keping</span>
                     <span>&bull;</span>
-                    <span className="text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200/80 text-[11px]">
+                    <span className="text-amber-700 font-medium bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200 text-[11px]">
                       Kapasitas Fleksibel Tanpa Batas
                     </span>
                   </div>
@@ -608,11 +621,10 @@ function CabinetDetailContent() {
                             <div className="text-xs font-bold text-slate-900 flex items-center gap-2">
                               <span>Slot #{slot.slotNumber}</span>
                               <span
-                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${
-                                  isBigDrawer
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${isBigDrawer
                                     ? 'bg-blue-50 text-blue-700 border border-blue-200'
                                     : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                }`}
+                                  }`}
                               >
                                 {isBigDrawer ? '1 Laci Besar' : '8 Laci Kecil Cluster'}
                               </span>
@@ -623,17 +635,28 @@ function CabinetDetailContent() {
                           </div>
                         </div>
 
-                        {/* Modular Switch Button */}
-                        {isSupervisorOrAdmin && (
+                        {/* Slot Header Actions: Cetak QR Slot & Modular Switch */}
+                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
                           <button
-                            onClick={() => openSlotModularModal(slot.slotNumber, slot.modularType)}
-                            className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 text-[11px] font-medium rounded-lg border border-slate-200 transition-colors flex items-center gap-1.5"
-                            title="Ganti format modular slot"
+                            onClick={() => setSlotQrModal({ isOpen: true, slot })}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium rounded-lg border border-slate-200 transition-colors flex items-center gap-1.5 shadow-sm"
+                            title="Lihat & Cetak Stiker QR Slot Modular"
                           >
-                            <Sliders className="w-3 h-3 text-slate-500" />
-                            <span>Ubah ke {isBigDrawer ? '8 Kecil' : '1 Besar'}</span>
+                            <QrCode className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>QR Slot</span>
                           </button>
-                        )}
+
+                          {isSupervisorOrAdmin && (
+                            <button
+                              onClick={() => openSlotModularModal(slot.slotNumber, slot.modularType)}
+                              className="px-2.5 py-1 bg-slate-50 hover:bg-slate-100 text-slate-700 text-[11px] font-medium rounded-lg border border-slate-200 transition-colors flex items-center gap-1.5"
+                              title="Ganti format modular slot"
+                            >
+                              <Sliders className="w-3 h-3 text-slate-500" />
+                              <span>Ubah ke {isBigDrawer ? '8 Kecil' : '1 Besar'}</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Drawers Content */}
@@ -647,17 +670,43 @@ function CabinetDetailContent() {
                               className="bg-slate-50/70 border border-slate-200 rounded-xl p-3.5 space-y-2.5"
                             >
                               <div className="flex items-center justify-between gap-2">
-                                <div>
-                                  <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                                    <Box className="w-3.5 h-3.5 text-emerald-700" />
-                                    <span>{drw.name}</span>
-                                  </div>
-                                  <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                                    {drw.code}
+                                <div className="flex items-center gap-2.5">
+                                  {/* Drawer QR thumbnail / preview button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setDrawerQrModal({ isOpen: true, drawer: drw, slot })}
+                                    className="p-1 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg flex items-center justify-center transition-all shadow-sm shrink-0"
+                                    title="Klik untuk melihat & mencetak QR Stiker Laci ini"
+                                  >
+                                    {drw.qrDataUrl ? (
+                                      <img src={drw.qrDataUrl} alt={drw.code} className="w-7 h-7 object-contain" />
+                                    ) : (
+                                      <QrCode className="w-5 h-5 text-emerald-700" />
+                                    )}
+                                  </button>
+
+                                  <div>
+                                    <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                      <Box className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                                      <span>{drw.name}</span>
+                                    </div>
+                                    <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                                      {drw.code}
+                                    </div>
                                   </div>
                                 </div>
 
                                 <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setDrawerQrModal({ isOpen: true, drawer: drw, slot })}
+                                    className="px-2 py-1 bg-white hover:bg-slate-50 text-slate-700 text-[10px] font-semibold rounded-md border border-slate-200 flex items-center gap-1 shadow-sm transition-colors"
+                                    title="Cetak Stiker QR Laci"
+                                  >
+                                    <Printer className="w-3 h-3 text-emerald-700" />
+                                    <span>QR Laci</span>
+                                  </button>
+
                                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200 shadow-sm">
                                     {items.length} Keping
                                   </span>
@@ -864,7 +913,7 @@ function CabinetDetailContent() {
                         formData: { ...addItemModal.formData, serialNumber: e.target.value.toUpperCase() },
                       })
                     }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -879,7 +928,7 @@ function CabinetDetailContent() {
                           formData: { ...addItemModal.formData, goldType: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     >
                       <option value="ANTAM">ANTAM</option>
                       <option value="UBS">UBS</option>
@@ -902,7 +951,7 @@ function CabinetDetailContent() {
                           formData: { ...addItemModal.formData, weightGrams: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -919,7 +968,7 @@ function CabinetDetailContent() {
                           formData: { ...addItemModal.formData, purity: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
 
@@ -935,7 +984,7 @@ function CabinetDetailContent() {
                           formData: { ...addItemModal.formData, slotPosition: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -952,7 +1001,7 @@ function CabinetDetailContent() {
                         formData: { ...addItemModal.formData, notes: e.target.value },
                       })
                     }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -1026,7 +1075,7 @@ function CabinetDetailContent() {
                           formData: { ...editItemModal.formData, goldType: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
 
@@ -1043,7 +1092,7 @@ function CabinetDetailContent() {
                           formData: { ...editItemModal.formData, weightGrams: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -1060,7 +1109,7 @@ function CabinetDetailContent() {
                           formData: { ...editItemModal.formData, purity: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
 
@@ -1075,7 +1124,7 @@ function CabinetDetailContent() {
                           formData: { ...editItemModal.formData, slotPosition: e.target.value },
                         })
                       }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -1090,7 +1139,7 @@ function CabinetDetailContent() {
                         formData: { ...editItemModal.formData, currentStatus: e.target.value },
                       })
                     }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
                     <option value="IN_HO">IN_HO (Tersimpan di Vault HO)</option>
                     <option value="ALLOCATED_PO">ALLOCATED_PO (Terkunci PO Picking)</option>
@@ -1108,7 +1157,7 @@ function CabinetDetailContent() {
                         formData: { ...editItemModal.formData, notes: e.target.value },
                       })
                     }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -1181,7 +1230,7 @@ function CabinetDetailContent() {
                         formData: { ...editCabinetModal.formData, name: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -1196,7 +1245,7 @@ function CabinetDetailContent() {
                         formData: { ...editCabinetModal.formData, description: e.target.value },
                       })
                     }
-                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700 resize-none"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
                   />
                 </div>
 
@@ -1283,6 +1332,140 @@ function CabinetDetailContent() {
           </div>
         )}
 
+        {/* Modal: Cetak QR Code Laci (Drawer) */}
+        {drawerQrModal.isOpen && drawerQrModal.drawer && (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-sm w-full p-6 shadow-2xl text-center">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                  <Printer className="w-4 h-4" />
+                  <span>Stiker Label QR Laci</span>
+                </span>
+                <button
+                  onClick={() => setDrawerQrModal({ isOpen: false, drawer: null, slot: null })}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Printable label visual */}
+              <div className="bg-slate-50 text-slate-950 p-5 rounded-2xl border-2 border-dashed border-slate-200 inline-block w-full text-center">
+                <div className="text-[9px] font-black tracking-wider text-slate-500 uppercase border-b border-slate-200 pb-1.5 mb-3">
+                  PEGADAIAN SMART VAULT &bull; HO CENTRAL
+                </div>
+
+                {drawerQrModal.drawer.qrDataUrl ? (
+                  <img
+                    src={drawerQrModal.drawer.qrDataUrl}
+                    alt={drawerQrModal.drawer.code}
+                    className="w-40 h-40 mx-auto mb-3 bg-white p-2 rounded-xl border border-slate-200"
+                  />
+                ) : (
+                  <div className="w-40 h-40 mx-auto bg-white border border-slate-200 rounded-xl flex items-center justify-center mb-3">
+                    <QrCode className="w-16 h-16 text-slate-400" />
+                  </div>
+                )}
+
+                <div className="text-base font-bold font-mono tracking-tight text-slate-900">
+                  {drawerQrModal.drawer.code}
+                </div>
+                <div className="text-xs font-semibold text-slate-700 mt-0.5">
+                  {drawerQrModal.drawer.name}
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono mt-2 bg-white py-1 px-2 rounded-md border border-slate-200 inline-block">
+                  {drawerQrModal.drawer.qrCode || `QR-${drawerQrModal.drawer.code}`}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-2">
+                  Lemari: <strong>{cabinet?.code}</strong> &bull; Slot #{drawerQrModal.slot?.slotNumber || 'Modular'}
+                </div>
+                <div className="text-[10px] text-slate-600 font-medium mt-1">
+                  Format: {drawerQrModal.slot?.modularType === 'BIG_DRAWER' ? 'Laci Besar' : 'Laci Kecil Cluster'} &bull; Terisi {drawerQrModal.drawer.items?.length || 0} Emas
+                </div>
+              </div>
+
+              <div className="mt-4 text-xs text-slate-500">
+                Tempelkan stiker label QR ini pada fisik laci untuk identifikasi posisi, scan audit harian, dan picking barang.
+              </div>
+
+              <button
+                onClick={() => window.print()}
+                className="mt-5 w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak Stiker QR Laci</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Cetak QR Code Slot Modular */}
+        {slotQrModal.isOpen && slotQrModal.slot && (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-sm w-full p-6 shadow-2xl text-center">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                  <Printer className="w-4 h-4" />
+                  <span>Stiker Label QR Slot #{slotQrModal.slot.slotNumber}</span>
+                </span>
+                <button
+                  onClick={() => setSlotQrModal({ isOpen: false, slot: null })}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Printable label visual */}
+              <div className="bg-slate-50 text-slate-950 p-5 rounded-2xl border-2 border-dashed border-slate-200 inline-block w-full text-center">
+                <div className="text-[9px] font-black tracking-wider text-slate-500 uppercase border-b border-slate-200 pb-1.5 mb-3">
+                  PEGADAIAN SMART VAULT &bull; HO CENTRAL
+                </div>
+
+                {slotQrModal.slot.qrDataUrl ? (
+                  <img
+                    src={slotQrModal.slot.qrDataUrl}
+                    alt={slotQrModal.slot.qrCode}
+                    className="w-40 h-40 mx-auto mb-3 bg-white p-2 rounded-xl border border-slate-200"
+                  />
+                ) : (
+                  <div className="w-40 h-40 mx-auto bg-white border border-slate-200 rounded-xl flex items-center justify-center mb-3">
+                    <QrCode className="w-16 h-16 text-slate-400" />
+                  </div>
+                )}
+
+                <div className="text-base font-bold font-mono tracking-tight text-slate-900">
+                  {cabinet?.code}-SL0{slotQrModal.slot.slotNumber}
+                </div>
+                <div className="text-xs font-semibold text-slate-700 mt-0.5">
+                  Slot Modular #{slotQrModal.slot.slotNumber} ({cabinet?.name})
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono mt-2 bg-white py-1 px-2 rounded-md border border-slate-200 inline-block">
+                  {slotQrModal.slot.qrCode}
+                </div>
+                <div className="text-[10px] text-slate-500 mt-2">
+                  Tipe Modular: <strong>{slotQrModal.slot.modularType === 'BIG_DRAWER' ? '1 Laci Besar' : '8 Laci Kecil Cluster'}</strong>
+                </div>
+                <div className="text-[10px] text-slate-600 font-medium mt-1">
+                  Total Tersimpan: {(slotQrModal.slot.drawers || []).reduce((acc, d) => acc + (d.items?.length || 0), 0)} keping emas
+                </div>
+              </div>
+
+              <div className="mt-4 text-xs text-slate-500">
+                Tempelkan stiker label QR ini pada rangka slot modular lemari untuk penanda unit slot.
+              </div>
+
+              <button
+                onClick={() => window.print()}
+                className="mt-5 w-full py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-xs flex items-center justify-center gap-2 shadow-sm transition-colors"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Cetak Stiker QR Slot</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Modal: Ubah Tipe Modular Slot (BIG_DRAWER <-> SMALL_CLUSTER) */}
         {slotModal.isOpen && (
           <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
@@ -1316,11 +1499,10 @@ function CabinetDetailContent() {
                   type="button"
                   onClick={() => handleModularSwitch('BIG_DRAWER')}
                   disabled={slotModal.submitting || slotModal.currentType === 'BIG_DRAWER'}
-                  className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
-                    slotModal.currentType === 'BIG_DRAWER'
+                  className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${slotModal.currentType === 'BIG_DRAWER'
                       ? 'bg-emerald-50 border-emerald-300 text-emerald-900 opacity-80 cursor-not-allowed'
                       : 'bg-white border-slate-200 hover:border-emerald-600 text-slate-800'
-                  }`}
+                    }`}
                 >
                   <div>
                     <div className="font-bold text-sm text-slate-900">1 Laci Besar (BIG_DRAWER)</div>
@@ -1335,11 +1517,10 @@ function CabinetDetailContent() {
                   type="button"
                   onClick={() => handleModularSwitch('SMALL_CLUSTER')}
                   disabled={slotModal.submitting || slotModal.currentType === 'SMALL_CLUSTER'}
-                  className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${
-                    slotModal.currentType === 'SMALL_CLUSTER'
+                  className={`w-full p-4 rounded-xl border text-left transition-all flex items-center justify-between ${slotModal.currentType === 'SMALL_CLUSTER'
                       ? 'bg-emerald-50 border-emerald-300 text-emerald-900 opacity-80 cursor-not-allowed'
                       : 'bg-white border-slate-200 hover:border-emerald-600 text-slate-800'
-                  }`}
+                    }`}
                 >
                   <div>
                     <div className="font-bold text-sm text-slate-900">8 Laci Kecil (SMALL_CLUSTER)</div>
