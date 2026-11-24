@@ -43,43 +43,53 @@ export default function DashboardLayout({ children }) {
   const userPerms = user?.permissions || [];
   const hasPerm = (perm) => isSuperAdmin || userPerms.includes(perm);
 
-  const navigation = [
-    // Super Admin Menus
-    ...(isSuperAdmin
-      ? [
+  const menuSections = [
+    // Super Admin / Master Section
+    {
+      title: 'SUPER ADMIN',
+      items: isSuperAdmin
+        ? [
           { name: 'Dashboard Super Admin', href: '/admin/dashboard', icon: LayoutDashboard },
           { name: 'Master Pengguna (Users)', href: '/admin/users', icon: Users },
           { name: 'Master Unit & Lokasi', href: '/admin/locations', icon: MapPin },
           { name: 'Master Peran & Hak Akses', href: '/admin/roles', icon: KeyRound },
         ]
-      : [
+        : [
           ...(hasPerm('DASHBOARD_ADMIN') ? [{ name: 'Dashboard Admin', href: '/admin/dashboard', icon: LayoutDashboard }] : []),
           ...(hasPerm('MASTER_USERS') ? [{ name: 'Master Pengguna', href: '/admin/users', icon: Users }] : []),
           ...(hasPerm('MASTER_LOCATIONS') ? [{ name: 'Master Unit & Lokasi', href: '/admin/locations', icon: MapPin }] : []),
-        ]),
+          ...(hasPerm('MASTER_ROLES') ? [{ name: 'Master Peran & Hak Akses', href: '/admin/roles', icon: KeyRound }] : []),
+        ],
+    },
 
-    // HO Menus
-    ...((isSuperAdmin || hasPerm('DASHBOARD_HO') || isHO)
-      ? [
-          ...((isSuperAdmin || hasPerm('DASHBOARD_HO') || isHO) ? [{ name: 'Dashboard Vault HO', href: '/ho/dashboard', icon: Building2 }] : []),
-          ...((isSuperAdmin || hasPerm('HO_CABINETS') || isHO) ? [{ name: '32 Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
-          ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
-          ...((isSuperAdmin || hasPerm('HO_ORDERS') || user?.role === 'HO_LOGISTICS' || user?.role === 'HO_SUPERVISOR')
-            ? [{ name: 'Purchase Order & Picking', href: '/ho/orders', icon: ShoppingCart }]
-            : []),
-        ]
-      : []),
+    // Head Office (HO) Section
+    {
+      title: 'HEAD OFFICE (HO)',
+      items: [
+        ...((isSuperAdmin || hasPerm('DASHBOARD_HO') || isHO) ? [{ name: 'Dashboard Vault HO', href: '/ho/dashboard', icon: Building2 }] : []),
+        ...((isSuperAdmin || hasPerm('HO_CABINETS') || isHO) ? [{ name: 'Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
+        ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
+      ],
+    },
 
-    // Outlet Menus
-    ...((isSuperAdmin || hasPerm('DASHBOARD_OUTLET') || !isHO)
-      ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }]
-      : []),
+    // Outlet Section
+    {
+      title: 'OUTLET / CABANG',
+      items: [
+        ...((isSuperAdmin || hasPerm('DASHBOARD_OUTLET') || !isHO) ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }] : []),
+      ],
+    },
 
-    // Audit log
-    ...((isSuperAdmin || hasPerm('AUDIT_LOG') || user?.role === 'SPI_AUDITOR' || user?.role === 'HO_SUPERVISOR' || user?.role === 'OUTLET_SUPERVISOR')
-      ? [{ name: 'Audit Trail & Log', href: '/audit', icon: FileText }]
-      : []),
-  ];
+    // System & Audit Section
+    {
+      title: 'SISTEM & AUDIT',
+      items: [
+        ...((isSuperAdmin || hasPerm('AUDIT_LOG') || user?.role === 'SPI_AUDITOR' || user?.role === 'HO_SUPERVISOR' || user?.role === 'OUTLET_SUPERVISOR')
+          ? [{ name: 'Audit Trail & Log', href: '/audit', icon: FileText }]
+          : []),
+      ],
+    },
+  ].filter((section) => section.items.length > 0);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col md:flex-row font-sans">
@@ -109,26 +119,40 @@ export default function DashboardLayout({ children }) {
           </div>
         </div>
 
-        {/* Navigation links */}
-        <nav className="flex-1 px-3 space-y-1 overflow-y-auto">
-          {navigation.map((item) => {
-            const Icon = item.icon;
-            const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition-all ${
-                  active
-                    ? 'bg-emerald-700 text-white font-semibold shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
-                }`}
-              >
-                <Icon className={`w-4 h-4 ${active ? 'text-white' : 'text-slate-400'}`} />
-                <span>{item.name}</span>
-              </Link>
-            );
-          })}
+        {/* Navigation links with Section Dividers */}
+        <nav className="flex-1 px-3 py-1 space-y-4 overflow-y-auto">
+          {menuSections.map((section, idx) => (
+            <div key={section.title} className="space-y-1">
+              {/* Divider & Section Title */}
+              <div className={`px-2 flex items-center gap-2 ${idx > 0 ? 'pt-2' : 'pt-0'} pb-1`}>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  {section.title}
+                </span>
+                <div className="flex-1 h-px bg-slate-200" />
+              </div>
+
+              {/* Section Items */}
+              <div className="space-y-1">
+                {section.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href + '/'));
+                  return (
+                    <Link
+                      key={item.name}
+                      href={item.href}
+                      className={`flex items-center gap-3 px-3.5 py-2 rounded-xl text-xs font-medium transition-all ${active
+                          ? 'bg-emerald-700 text-white font-semibold shadow-sm'
+                          : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+                        }`}
+                    >
+                      <Icon className={`w-4 h-4 shrink-0 ${active ? 'text-white' : 'text-slate-400'}`} />
+                      <span className="truncate">{item.name}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
         </nav>
 
         {/* Logout button */}
