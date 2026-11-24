@@ -10,6 +10,8 @@ const {
   receiveOrder,
   updateDraftOrder,
   deleteDraftOrder,
+  getOutletDrawers,
+  pairItemRfid,
 } = require('../controllers/outletOrder.controller');
 
 const router = express.Router();
@@ -21,6 +23,7 @@ const router = express.Router();
  *   description: Purchase Order dari Outlet ke HO
  */
 
+router.get('/drawers', authenticate, getOutletDrawers);
 router.get('/', authenticate, listOutletOrders);
 router.get('/:id', authenticate, getOutletOrderDetail);
 router.post('/', authenticate, createDraftOrder);
@@ -30,5 +33,6 @@ router.patch('/:id/submit-to-spv', authenticate, submitToOutletSpv);
 router.patch('/:id/approve-outlet', authenticate, approveByOutletSpv);
 router.patch('/:id/reject-outlet', authenticate, rejectByOutletSpv);
 router.patch('/:id/receive', authenticate, receiveOrder);
+router.post('/:id/pair-item-rfid', authenticate, pairItemRfid);
 
 module.exports = router;

@@ -20,6 +20,9 @@ import {
   ShoppingCart,
   KeyRound,
   CheckCircle2,
+  Package,
+  Truck,
+  ArrowLeftRight,
 } from 'lucide-react';
 
 export default function DashboardLayout({ children }) {
@@ -70,7 +73,7 @@ export default function DashboardLayout({ children }) {
         ...((isSuperAdmin || hasPerm('HO_INBOUND') || isHO) ? [{ name: 'PO Inbound (Pengadaan)', href: '/ho/inbound', icon: Box }] : []),
         ...((isSuperAdmin || hasPerm('HO_CABINETS') || isHO) ? [{ name: 'Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
         ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
-        ...((isSuperAdmin || hasPerm('HO_ORDERS') || isHO) ? [{ name: 'PO & Picking Emas', href: '/ho/orders', icon: ShoppingCart }] : []),
+        ...((isSuperAdmin || hasPerm('HO_ORDERS') || isHO) ? [{ name: 'PO Outlet & Picking Emas', href: '/ho/orders', icon: ShoppingCart }] : []),
       ],
     },
 
@@ -79,7 +82,10 @@ export default function DashboardLayout({ children }) {
       title: 'OUTLET / CABANG',
       items: [
         ...((isSuperAdmin || hasPerm('DASHBOARD_OUTLET') || !isHO) ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_ORDERS') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'Request Emas ke HO', href: '/outlet/orders', icon: ShoppingCart }] : []),
+        ...((isSuperAdmin || hasPerm('OUTLET_INVENTORY') || !isHO) ? [{ name: 'Inventori Emas Cabang', href: '/outlet/inventory', icon: Package }] : []),
+        ...((isSuperAdmin || hasPerm('OUTLET_CABINETS') || !isHO) ? [{ name: 'Lemari & Baki RFID', href: '/outlet/cabinets', icon: Layers }] : []),
+        ...((isSuperAdmin || hasPerm('OUTLET_ORDERS') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'PO Inbound (Request ke HO)', href: '/outlet/orders', icon: ShoppingCart }] : []),
+        ...((isSuperAdmin || hasPerm('OUTLET_OUTBOUND') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'PO Outbound & Mutasi Emas', href: '/outlet/outbound', icon: ArrowLeftRight }] : []),
       ],
     },
 

@@ -71,22 +71,6 @@ function CabinetDetailContent() {
     error: '',
   });
 
-  // Add Item to Drawer Modal State (Create Item)
-  const [addItemModal, setAddItemModal] = useState({
-    isOpen: false,
-    drawer: null,
-    submitting: false,
-    error: '',
-    formData: {
-      serialNumber: '',
-      goldType: 'ANTAM',
-      weightGrams: 10,
-      purity: '999.9',
-      slotPosition: '',
-      notes: '',
-    },
-  });
-
   // Edit Item Modal State (Update Item)
   const [editItemModal, setEditItemModal] = useState({
     isOpen: false,
@@ -267,67 +251,6 @@ function CabinetDetailContent() {
       setSlotModal((prev) => ({ ...prev, submitting: false, error: errMsg }));
       showToast.error(errMsg);
       alertError('Gagal Konversi Modular', errMsg);
-    }
-  };
-
-  // Open Add Item Modal for a Drawer
-  const openAddItemModal = (drw) => {
-    setAddItemModal({
-      isOpen: true,
-      drawer: drw,
-      submitting: false,
-      error: '',
-      formData: {
-        serialNumber: '',
-        goldType: 'ANTAM',
-        weightGrams: 10,
-        purity: '999.9',
-        slotPosition: `SLOT-${String((drw.items?.length || 0) + 1).padStart(2, '0')}`,
-        notes: '',
-      },
-    });
-  };
-
-  // Submit Add Item to Drawer
-  const handleAddItemSubmit = async (e) => {
-    e.preventDefault();
-    const { drawer, formData } = addItemModal;
-    setAddItemModal((prev) => ({ ...prev, submitting: true, error: '' }));
-    const toastId = showToast.loading(`Mendaftarkan emas ${formData.serialNumber}...`);
-
-    try {
-      await apiRequest('/ho/inventory/inbound', {
-        method: 'POST',
-        body: JSON.stringify({
-          serialNumber: formData.serialNumber,
-          goldType: formData.goldType,
-          weightGrams: parseFloat(formData.weightGrams),
-          purity: formData.purity,
-          drawerCode: drawer.code,
-          slotPosition: formData.slotPosition,
-          notes: formData.notes,
-        }),
-      });
-
-      showToast.dismiss(toastId);
-      showToast.success(`Keping emas ${formData.serialNumber} berhasil dimasukkan ke ${drawer.code}!`);
-      alertSuccess('Berhasil!', `Emas ${formData.serialNumber} (${formData.goldType} ${formData.weightGrams}g) tersimpan.`);
-
-      setAddItemModal({
-        isOpen: false,
-        drawer: null,
-        submitting: false,
-        error: '',
-        formData: { serialNumber: '', goldType: 'ANTAM', weightGrams: 10, purity: '999.9', slotPosition: '', notes: '' },
-      });
-
-      await loadCabinetDetail(cabinet.code);
-    } catch (err) {
-      showToast.dismiss(toastId);
-      const errMsg = err.message || 'Gagal menambahkan emas ke laci';
-      setAddItemModal((prev) => ({ ...prev, submitting: false, error: errMsg }));
-      showToast.error(errMsg);
-      alertError('Gagal Tambah Emas', errMsg);
     }
   };
 
@@ -710,23 +633,13 @@ function CabinetDetailContent() {
                                   <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white text-slate-700 border border-slate-200 shadow-sm">
                                     {items.length} Keping
                                   </span>
-
-                                  {isSupervisorOrAdmin && (
-                                    <button
-                                      onClick={() => openAddItemModal(drw)}
-                                      className="px-2.5 py-1 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-medium rounded-lg flex items-center gap-1 shadow-sm transition-colors"
-                                    >
-                                      <Plus className="w-3 h-3" />
-                                      <span>Tambah Emas</span>
-                                    </button>
-                                  )}
                                 </div>
                               </div>
 
                               {/* Items List in this Drawer */}
                               {items.length === 0 ? (
                                 <div className="p-3 rounded-lg bg-white border border-dashed border-slate-200 text-center text-[11px] text-slate-400">
-                                  Belum ada keping emas di laci ini. Klik &quot;+ Tambah Emas&quot; untuk input.
+                                  Belum ada keping emas di laci ini. Penambahan emas wajib melalui menu PO Inbound.
                                 </div>
                               ) : (
                                 <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1 scrollbar-thin">
@@ -859,170 +772,6 @@ function CabinetDetailContent() {
                 <Printer className="w-4 h-4" />
                 <span>Cetak Stiker QR Lemari</span>
               </button>
-            </div>
-          </div>
-        )}
-
-        {/* Modal: Tambah Keping Emas Baru ke Laci (Create Item) */}
-        {addItemModal.isOpen && (
-          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Box className="w-4 h-4 text-emerald-700" />
-                  <span>Tambah Emas ke {addItemModal.drawer?.name}</span>
-                </h3>
-                <button
-                  onClick={() => setAddItemModal({ ...addItemModal, isOpen: false })}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {addItemModal.error && (
-                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{addItemModal.error}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleAddItemSubmit} className="space-y-3.5 text-xs">
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Kode Laci Tujuan</label>
-                  <input
-                    type="text"
-                    disabled
-                    value={addItemModal.drawer?.code}
-                    className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-slate-500 font-mono cursor-not-allowed"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">
-                    Nomor Seri Emas / Tag ID <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="Contoh: ANT-9948210"
-                    value={addItemModal.formData.serialNumber}
-                    onChange={(e) =>
-                      setAddItemModal({
-                        ...addItemModal,
-                        formData: { ...addItemModal.formData, serialNumber: e.target.value.toUpperCase() },
-                      })
-                    }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Tipe / Merk Emas</label>
-                    <select
-                      value={addItemModal.formData.goldType}
-                      onChange={(e) =>
-                        setAddItemModal({
-                          ...addItemModal,
-                          formData: { ...addItemModal.formData, goldType: e.target.value },
-                        })
-                      }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    >
-                      <option value="ANTAM">ANTAM</option>
-                      <option value="UBS">UBS</option>
-                      <option value="LOTUS_ARCHI">LOTUS ARCHI</option>
-                      <option value="GALERI24">GALERI 24</option>
-                      <option value="PUBLIC_GOLD">PUBLIC GOLD</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Berat (Gram)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      required
-                      value={addItemModal.formData.weightGrams}
-                      onChange={(e) =>
-                        setAddItemModal({
-                          ...addItemModal,
-                          formData: { ...addItemModal.formData, weightGrams: e.target.value },
-                        })
-                      }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Kadar Kemurnian</label>
-                    <input
-                      type="text"
-                      value={addItemModal.formData.purity}
-                      onChange={(e) =>
-                        setAddItemModal({
-                          ...addItemModal,
-                          formData: { ...addItemModal.formData, purity: e.target.value },
-                        })
-                      }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Posisi Slot Laci</label>
-                    <input
-                      type="text"
-                      placeholder="SLOT-01"
-                      value={addItemModal.formData.slotPosition}
-                      onChange={(e) =>
-                        setAddItemModal({
-                          ...addItemModal,
-                          formData: { ...addItemModal.formData, slotPosition: e.target.value },
-                        })
-                      }
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Catatan Tambahan</label>
-                  <input
-                    type="text"
-                    placeholder="Contoh: CertiCard Baru"
-                    value={addItemModal.formData.notes}
-                    onChange={(e) =>
-                      setAddItemModal({
-                        ...addItemModal,
-                        formData: { ...addItemModal.formData, notes: e.target.value },
-                      })
-                    }
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setAddItemModal({ ...addItemModal, isOpen: false })}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium transition-colors"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={addItemModal.submitting}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl flex items-center gap-1.5 shadow-sm transition-colors"
-                  >
-                    {addItemModal.submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    <span>Simpan Emas</span>
-                  </button>
-                </div>
-              </form>
             </div>
           </div>
         )}
