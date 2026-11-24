@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, use } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, use } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { apiRequest } from '@/lib/api';
 import {
@@ -143,6 +143,83 @@ export default function OutletCabinetDetailPage({ params }) {
     }
   };
 
+  const rowsCount = activeDrawer?.rows || 6;
+  const colsCount = activeDrawer?.cols || 55;
+  const drawerItems = activeDrawer?.items || [];
+  const drawerCapacity = activeDrawer?.capacity || rowsCount * colsCount;
+  const percentFilled = drawerCapacity > 0 ? Math.round((drawerItems.length / drawerCapacity) * 100) : 0;
+
+  // Strict 1-to-1 mapping from slot position to item
+  // Hook called unconditionally at top level (Rules of Hooks)
+  const slotToItemMap = useMemo(() => {
+    const map = {};
+    const placedItemIds = new Set();
+    const unplacedItems = [];
+
+    const parseSlotPos = (pos) => {
+      if (!pos) return null;
+      const s = String(pos).trim().toUpperCase();
+
+      // Format "R1-05" or "R1-C5"
+      const matchRC = s.match(/^R(\d+)[-C](\d+)$/);
+      if (matchRC) {
+        const r = parseInt(matchRC[1], 10);
+        const c = parseInt(matchRC[2], 10);
+        if (r >= 1 && r <= rowsCount && c >= 1 && c <= colsCount) {
+          return { row: r, col: c };
+        }
+      }
+
+      // Format "SLOT-05" or "SLOT-5" or numeric "5"
+      const matchSlot = s.match(/^(?:SLOT-?)?0*(\d+)$/);
+      if (matchSlot) {
+        const linear = parseInt(matchSlot[1], 10);
+        if (linear >= 1 && linear <= drawerCapacity) {
+          const r = Math.floor((linear - 1) / colsCount) + 1;
+          const c = ((linear - 1) % colsCount) + 1;
+          return { row: r, col: c };
+        }
+      }
+
+      return null;
+    };
+
+    // Pass 1: Place items that have an explicit valid coordinate
+    drawerItems.forEach((it) => {
+      const coord = parseSlotPos(it.slotPosition);
+      if (coord) {
+        const key = `R${coord.row}-${String(coord.col).padStart(2, '0')}`;
+        if (!map[key] && !placedItemIds.has(it.id)) {
+          map[key] = it;
+          placedItemIds.add(it.id);
+          return;
+        }
+      }
+      unplacedItems.push(it);
+    });
+
+    // Pass 2: Place any unplaced items sequentially into empty slots
+    let currLinear = 1;
+    for (const it of unplacedItems) {
+      if (placedItemIds.has(it.id)) continue;
+
+      while (currLinear <= drawerCapacity) {
+        const r = Math.floor((currLinear - 1) / colsCount) + 1;
+        const c = ((currLinear - 1) % colsCount) + 1;
+        const key = `R${r}-${String(c).padStart(2, '0')}`;
+        currLinear++;
+
+        if (!map[key]) {
+          map[key] = it;
+          placedItemIds.add(it.id);
+          break;
+        }
+      }
+    }
+
+    return map;
+  }, [drawerItems, rowsCount, colsCount, drawerCapacity]);
+
   if (loading && !cabinet) {
     return (
       <DashboardLayout>
@@ -163,24 +240,6 @@ export default function OutletCabinetDetailPage({ params }) {
       </DashboardLayout>
     );
   }
-
-  const rowsCount = activeDrawer?.rows || 6;
-  const colsCount = activeDrawer?.cols || 55;
-  const drawerItems = activeDrawer?.items || [];
-  const drawerCapacity = activeDrawer?.capacity || rowsCount * colsCount;
-  const percentFilled = drawerCapacity > 0 ? Math.round((drawerItems.length / drawerCapacity) * 100) : 0;
-
-  // Build grid slot matrix (Row 1 to rowsCount, Col 1 to colsCount)
-  // Mapping item by position
-  const itemMapByCoord = {};
-  drawerItems.forEach((it, idx) => {
-    if (it.slotPosition) {
-      // normalize e.g. "R1-05" or "SLOT-01"
-      itemMapByCoord[it.slotPosition.toUpperCase()] = it;
-    }
-    // Also fallback index mapping
-    itemMapByCoord[`INDEX-${idx + 1}`] = it;
-  });
 
   return (
     <DashboardLayout>
@@ -264,18 +323,16 @@ export default function OutletCabinetDetailPage({ params }) {
                   type="button"
                   key={drw.id}
                   onClick={() => setSelectedDrawerId(drw.id)}
-                  className={`px-3.5 py-2.5 rounded-xl border text-left whitespace-nowrap transition-all flex flex-col gap-0.5 min-w-[130px] ${
-                    isSelected
+                  className={`px-3.5 py-2.5 rounded-xl border text-left whitespace-nowrap transition-all flex flex-col gap-0.5 min-w-32.5 ${isSelected
                       ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm font-semibold'
                       : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs">Laci {String(idx + 1).padStart(2, '0')}</span>
                     <span
-                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${
-                        isSelected ? 'bg-emerald-800 text-emerald-100' : 'bg-slate-200 text-slate-700'
-                      }`}
+                      className={`text-[9px] px-1.5 py-0.2 rounded-full font-mono ${isSelected ? 'bg-emerald-800 text-emerald-100' : 'bg-slate-200 text-slate-700'
+                        }`}
                     >
                       {itemCount} pcs
                     </span>
@@ -383,14 +440,9 @@ export default function OutletCabinetDetailPage({ params }) {
                         {Array.from({ length: colsCount }, (_, cIdx) => {
                           const colNum = cIdx + 1;
                           const slotPosCode = `R${rowNum}-${String(colNum).padStart(2, '0')}`;
-                          const linearIndex = (rowNum - 1) * colsCount + colNum;
 
-                          // Check if there is an item at this slot
-                          const item =
-                            itemMapByCoord[slotPosCode] ||
-                            itemMapByCoord[`R${rowNum}-C${colNum}`] ||
-                            itemMapByCoord[`SLOT-${String(linearIndex).padStart(2, '0')}`] ||
-                            (drawerItems[linearIndex - 1] ? drawerItems[linearIndex - 1] : null);
+                          // Strict 1-to-1 lookup: slot only contains an item if uniquely assigned
+                          const item = slotToItemMap[slotPosCode] || null;
 
                           const isHighlighted =
                             searchQuery &&
@@ -411,13 +463,12 @@ export default function OutletCabinetDetailPage({ params }) {
                                   ? `[${slotPosCode}] ${item.id} (${item.brand} ${item.weight}g) - RFID: ${item.rfidTag || 'None'}`
                                   : `Slot ${slotPosCode} (Kosong)`
                               }
-                              className={`w-7 h-7 rounded-md shrink-0 flex items-center justify-center text-[9px] font-mono transition-all relative ${
-                                item
+                              className={`w-7 h-7 rounded-md shrink-0 flex items-center justify-center text-[9px] font-mono transition-all relative ${item
                                   ? isHighlighted
                                     ? 'bg-amber-400 text-slate-900 font-bold ring-2 ring-amber-500 scale-110 shadow-sm z-10'
                                     : 'bg-emerald-600 hover:bg-emerald-700 text-white font-bold shadow-xs hover:scale-110 cursor-pointer'
                                   : 'bg-white hover:bg-slate-200 border border-slate-200/80 text-slate-400 hover:text-slate-700 cursor-default'
-                              }`}
+                                }`}
                             >
                               {item ? (
                                 <Box size={11} className="text-emerald-100" />

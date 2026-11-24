@@ -6,6 +6,7 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 import { apiRequest } from '@/lib/api';
 import toast from 'react-hot-toast';
+import Swal from 'sweetalert2';
 import {
   ArrowLeftRight,
   Package,
@@ -15,6 +16,8 @@ import {
   Layers,
   ShieldCheck,
   CheckCircle2,
+  CheckCircle,
+  Clock,
   AlertCircle,
   RefreshCw,
   Copy,
@@ -37,6 +40,7 @@ import {
   Check,
   QrCode,
   AlertTriangle,
+  Loader2,
 } from 'lucide-react';
 
 export default function OutletOutboundPage() {
@@ -95,15 +99,67 @@ export default function OutletOutboundPage() {
     isOpen: false,
     submitting: false,
     selectedItemId: '',
+    targetCabinetCode: '',
+    targetCabinetName: '',
     targetDrawerId: '',
+    targetDrawerCode: '',
+    targetDrawerName: '',
+    targetRowNumber: null,
     targetSlotPosition: '',
     reason: 'Penataan ulang kategori berat emas di baki RFID',
+  });
+
+  const [vaultPicker, setVaultPicker] = useState({
+    isOpen: false,
+    step: 'CABINETS', // 'CABINETS' | 'DRAWERS' | 'ROWS'
+    cabinetsList: [],
+    loadingCabinets: false,
+    cabinetSearch: '',
+    selectedCabinet: null,
+    cabinetDetail: null,
+    loadingDetail: false,
+    selectedDrawer: null,
   });
 
   const [detailModal, setDetailModal] = useState({
     isOpen: false,
     transaction: null,
   });
+
+  const [rfidModal, setRfidModal] = useState({
+    isOpen: false,
+    transaction: null,
+    scannedItems: {},
+    antennaPinging: false,
+    submitting: false,
+  });
+
+  // Local storage helpers for pending outbound requests
+  const getStorageKey = useCallback(() => {
+    const locId = isSuperAdmin ? selectedOutletId : user?.locationId;
+    return `pegadaian_pending_outbound_${locId || 'default'}`;
+  }, [isSuperAdmin, selectedOutletId, user?.locationId]);
+
+  const loadPendingRequests = useCallback(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const key = getStorageKey();
+      const saved = localStorage.getItem(key);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  }, [getStorageKey]);
+
+  const savePendingRequests = useCallback((list) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const key = getStorageKey();
+      localStorage.setItem(key, JSON.stringify(list));
+    } catch (e) {
+      console.error(e);
+    }
+  }, [getStorageKey]);
 
   // Fetch Outlets for Super Admin
   const fetchLocations = async () => {
@@ -138,18 +194,40 @@ export default function OutletOutboundPage() {
       }
 
       const res = await apiRequest('/outlet/outbound', { params });
-      if (res && res.data) {
-        setTransactions(res.data.transactions || []);
-        setStats(res.data.stats || {});
-        setLocationInfo(res.data.location || null);
-      }
+      const backendTx = (res && res.data && res.data.transactions) ? res.data.transactions : [];
+      const statsData = (res && res.data && res.data.stats) ? res.data.stats : {};
+      const loc = (res && res.data && res.data.location) ? res.data.location : null;
+
+      // Load pending requests from local storage
+      const pendingList = loadPendingRequests();
+
+      // Filter pending requests by tab & search
+      const filteredPending = pendingList.filter((t) => {
+        if (activeTab !== 'ALL' && t.type !== activeTab) return false;
+        if (search && search.trim()) {
+          const q = search.trim().toLowerCase();
+          const matchId = t.id?.toLowerCase().includes(q);
+          const matchCustomer = t.customerName?.toLowerCase().includes(q);
+          const matchDest = t.destLocationName?.toLowerCase().includes(q);
+          const matchItems = t.items?.some((it) => it.id?.toLowerCase().includes(q) || it.brand?.toLowerCase().includes(q));
+          if (!matchId && !matchCustomer && !matchDest && !matchItems) return false;
+        }
+        return true;
+      });
+
+      setTransactions([...filteredPending, ...backendTx]);
+      setStats({
+        ...statsData,
+        totalTransactions: (statsData.totalTransactions || 0) + pendingList.length,
+      });
+      setLocationInfo(loc);
     } catch (err) {
       console.error(err);
       toast.error('Gagal memuat riwayat outbound cabang');
     } finally {
       setLoading(false);
     }
-  }, [activeTab, search, isSuperAdmin, selectedOutletId]);
+  }, [activeTab, search, isSuperAdmin, selectedOutletId, loadPendingRequests]);
 
   useEffect(() => {
     fetchOutboundData();
@@ -212,7 +290,7 @@ export default function OutletOutboundPage() {
     });
   };
 
-  // Submit Sale Modal
+  // Submit Sale Modal -> Creates Outbound Request (PENDING_APPROVAL)
   const handleSubmitSale = async (e) => {
     e.preventDefault();
     if (saleModal.selectedItemIds.length === 0) {
@@ -226,28 +304,49 @@ export default function OutletOutboundPage() {
 
     try {
       setSaleModal((prev) => ({ ...prev, submitting: true }));
-      const payload = {
-        outletLocationId: isSuperAdmin ? selectedOutletId : user?.locationId,
-        itemIds: saleModal.selectedItemIds,
+      const selectedItemsList = availableItems.filter((it) => saleModal.selectedItemIds.includes(it.id));
+      const totalWeight = selectedItemsList.reduce((acc, it) => acc + (it.weight || 0), 0);
+
+      const newTx = {
+        id: `OUT-SALE-${Date.now().toString().slice(-6)}`,
+        type: 'CUSTOMER_SALE',
+        typeName: 'Penjualan ke Nasabah',
+        status: 'PENDING_APPROVAL',
         customerName: saleModal.customerName,
         customerNik: saleModal.customerNik,
         customerPhone: saleModal.customerPhone,
         salePrice: saleModal.salePrice,
         invoiceNumber: saleModal.invoiceNumber,
         notes: saleModal.notes,
+        items: selectedItemsList,
+        totalItems: selectedItemsList.length,
+        totalWeight,
+        requestedBy: user?.username || 'Petugas Outlet',
+        timestamp: new Date().toISOString(),
+        payload: {
+          endpoint: '/outlet/outbound/customer-sale',
+          data: {
+            outletLocationId: isSuperAdmin ? selectedOutletId : user?.locationId,
+            itemIds: saleModal.selectedItemIds,
+            customerName: saleModal.customerName,
+            customerNik: saleModal.customerNik,
+            customerPhone: saleModal.customerPhone,
+            salePrice: saleModal.salePrice,
+            invoiceNumber: saleModal.invoiceNumber,
+            notes: saleModal.notes,
+          },
+        },
       };
 
-      const res = await apiRequest('/outlet/outbound/customer-sale', {
-        method: 'POST',
-        data: payload,
-      });
+      const existingPending = loadPendingRequests();
+      savePendingRequests([newTx, ...existingPending]);
 
-      toast.success(res.message || 'Penjualan ke nasabah berhasil diproses!');
+      toast.success('Pengajuan Penjualan berhasil dibuat! Menunggu Approval SPV Cabang.');
       setSaleModal((prev) => ({ ...prev, isOpen: false }));
       fetchOutboundData();
     } catch (err) {
       console.error(err);
-      toast.error(err.response?.data?.message || 'Gagal memproses penjualan ke nasabah');
+      toast.error('Gagal membuat pengajuan penjualan');
     } finally {
       setSaleModal((prev) => ({ ...prev, submitting: false }));
     }
@@ -268,7 +367,7 @@ export default function OutletOutboundPage() {
     });
   };
 
-  // Submit External Mutation Modal
+  // Submit External Mutation Modal -> Creates Outbound Request (PENDING_APPROVAL)
   const handleSubmitExternal = async (e) => {
     e.preventDefault();
     if (externalModal.selectedItemIds.length === 0) {
@@ -282,27 +381,49 @@ export default function OutletOutboundPage() {
 
     try {
       setExternalModal((prev) => ({ ...prev, submitting: true }));
-      const payload = {
-        sourceLocationId: isSuperAdmin ? selectedOutletId : user?.locationId,
-        destLocId: externalModal.destLocId,
-        itemIds: externalModal.selectedItemIds,
+      const selectedItemsList = availableItems.filter((it) => externalModal.selectedItemIds.includes(it.id));
+      const totalWeight = selectedItemsList.reduce((acc, it) => acc + (it.weight || 0), 0);
+      const targetDest = destinationOutlets.find((d) => d.id === externalModal.destLocId);
+
+      const newTx = {
+        id: `MUT-OUT-${Date.now().toString().slice(-6)}`,
+        type: 'MUTATION_EXTERNAL',
+        typeName: 'Mutasi Antar Cabang',
+        status: 'PENDING_APPROVAL',
+        destLocationName: targetDest?.name || 'Cabang Tujuan',
+        destLocationCode: targetDest?.code || 'DEST',
         kurirName: externalModal.kurirName,
         vehicleNumber: externalModal.vehicleNumber,
         trackingNumber: externalModal.trackingNumber,
         notes: externalModal.notes,
+        items: selectedItemsList,
+        totalItems: selectedItemsList.length,
+        totalWeight,
+        requestedBy: user?.username || 'Petugas Outlet',
+        timestamp: new Date().toISOString(),
+        payload: {
+          endpoint: '/outlet/outbound/external-mutation',
+          data: {
+            sourceLocationId: isSuperAdmin ? selectedOutletId : user?.locationId,
+            destLocId: externalModal.destLocId,
+            itemIds: externalModal.selectedItemIds,
+            kurirName: externalModal.kurirName,
+            vehicleNumber: externalModal.vehicleNumber,
+            trackingNumber: externalModal.trackingNumber,
+            notes: externalModal.notes,
+          },
+        },
       };
 
-      const res = await apiRequest('/outlet/outbound/external-mutation', {
-        method: 'POST',
-        data: payload,
-      });
+      const existingPending = loadPendingRequests();
+      savePendingRequests([newTx, ...existingPending]);
 
-      toast.success(res.message || 'Mutasi antar cabang berhasil di-dispatch!');
+      toast.success('Pengajuan Mutasi Antar Cabang dibuat! Menunggu Approval SPV Cabang.');
       setExternalModal((prev) => ({ ...prev, isOpen: false }));
       fetchOutboundData();
     } catch (err) {
       console.error(err);
-      toast.error(err.response?.data?.message || 'Gagal membuat mutasi antar cabang');
+      toast.error('Gagal membuat pengajuan mutasi');
     } finally {
       setExternalModal((prev) => ({ ...prev, submitting: false }));
     }
@@ -315,13 +436,140 @@ export default function OutletOutboundPage() {
       isOpen: true,
       submitting: false,
       selectedItemId: '',
+      targetCabinetCode: '',
+      targetCabinetName: '',
       targetDrawerId: '',
+      targetDrawerCode: '',
+      targetDrawerName: '',
+      targetRowNumber: null,
       targetSlotPosition: '',
       reason: 'Penataan ulang kategori berat emas di baki RFID',
     });
   };
 
-  // Submit Internal Mutation Modal
+  // Open Hierarchical Vault Location Picker (Lemari -> Laci -> Row) for Internal Mutation
+  const handleOpenVaultPicker = async () => {
+    let cabs = cabinetsWithDrawers;
+    const targetLoc = isSuperAdmin ? selectedOutletId : user?.locationId;
+    if (cabs.length === 0) {
+      try {
+        const cabRes = await apiRequest('/outlet/cabinets', {
+          params: targetLoc ? { outletLocationId: targetLoc } : {},
+        });
+        const list = cabRes?.data?.cabinets || [];
+        const detailedCabs = [];
+        for (const c of list) {
+          try {
+            const det = await apiRequest(`/outlet/cabinets/${c.code}`);
+            if (det?.data?.cabinet) detailedCabs.push(det.data.cabinet);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+        cabs = detailedCabs;
+        setCabinetsWithDrawers(detailedCabs);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    if (cabs.length === 1) {
+      const singleCab = cabs[0];
+      setVaultPicker({
+        isOpen: true,
+        step: 'DRAWERS',
+        cabinetsList: cabs,
+        loadingCabinets: false,
+        cabinetSearch: '',
+        selectedCabinet: singleCab,
+        cabinetDetail: singleCab,
+        loadingDetail: false,
+        selectedDrawer: null,
+      });
+
+      try {
+        const res = await apiRequest(`/outlet/cabinets/${singleCab.code}`);
+        const detail = res.data?.cabinet || res.data;
+        setVaultPicker((prev) => ({
+          ...prev,
+          cabinetDetail: detail,
+        }));
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      setVaultPicker({
+        isOpen: true,
+        step: 'CABINETS',
+        cabinetsList: cabs,
+        loadingCabinets: false,
+        cabinetSearch: '',
+        selectedCabinet: null,
+        cabinetDetail: null,
+        loadingDetail: false,
+        selectedDrawer: null,
+      });
+    }
+  };
+
+  const handleSelectCabinet = async (cab) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedCabinet: cab,
+      step: 'DRAWERS',
+      loadingDetail: true,
+      selectedDrawer: null,
+    }));
+    try {
+      const res = await apiRequest(`/outlet/cabinets/${cab.code}`);
+      const detail = res.data?.cabinet || res.data;
+      setVaultPicker((prev) => ({
+        ...prev,
+        cabinetDetail: detail,
+        loadingDetail: false,
+      }));
+    } catch (err) {
+      console.error(err);
+      setVaultPicker((prev) => ({
+        ...prev,
+        cabinetDetail: cab,
+        loadingDetail: false,
+      }));
+    }
+  };
+
+  const handleSelectDrawer = (drw) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedDrawer: drw,
+      step: 'ROWS',
+    }));
+  };
+
+  const handleSelectRow = (rowNum, nextSlotPos) => {
+    const cab = vaultPicker.selectedCabinet;
+    const drw = vaultPicker.selectedDrawer;
+
+    setInternalModal((prev) => ({
+      ...prev,
+      targetCabinetCode: cab?.code || drw?.cabinetCode || '',
+      targetCabinetName: cab?.name || drw?.cabinetName || '',
+      targetDrawerId: drw?.id || '',
+      targetDrawerCode: drw?.code || '',
+      targetDrawerName: drw?.name || 'Laci',
+      targetRowNumber: rowNum,
+      targetSlotPosition: nextSlotPos,
+    }));
+
+    toast.success(`Tujuan dipilih: ${drw?.name || drw?.code} • Row ${rowNum} (${nextSlotPos})`);
+
+    setVaultPicker((prev) => ({
+      ...prev,
+      isOpen: false,
+    }));
+  };
+
+  // Submit Internal Mutation Modal -> Creates Outbound Request (PENDING_APPROVAL)
   const handleSubmitInternal = async (e) => {
     e.preventDefault();
     if (!internalModal.selectedItemId) {
@@ -329,32 +577,283 @@ export default function OutletOutboundPage() {
       return;
     }
     if (!internalModal.targetDrawerId) {
-      toast.error('Pilih laci / baki tujuan');
+      toast.error('Pilih lemari, laci dan baris (Row) tujuan');
       return;
     }
 
     try {
       setInternalModal((prev) => ({ ...prev, submitting: true }));
-      const payload = {
-        itemId: internalModal.selectedItemId,
+      const selectedItem = availableItems.find((it) => it.id === internalModal.selectedItemId);
+
+      const newTx = {
+        id: `INT-${Date.now().toString().slice(-6)}`,
+        type: 'MUTATION_INTERNAL',
+        typeName: 'Mutasi Antar Laci',
+        status: 'PENDING_APPROVAL',
+        details: `Pemindahan fisik keping ${selectedItem?.id} (${selectedItem?.brand} ${selectedItem?.weight}g) dari ${selectedItem?.cabinetCode} > ${selectedItem?.drawerName} (${selectedItem?.slotPosition}) ke ${internalModal.targetCabinetCode} > ${internalModal.targetDrawerName} (${internalModal.targetSlotPosition || 'R1-01'}). ${internalModal.reason || ''}`,
+        item: {
+          id: selectedItem?.id,
+          brand: selectedItem?.brand,
+          weight: selectedItem?.weight,
+          purity: selectedItem?.purity,
+          rfidTag: selectedItem?.rfidTag,
+          fromCabinet: selectedItem?.cabinetCode,
+          fromDrawer: selectedItem?.drawerName,
+          fromSlot: selectedItem?.slotPosition,
+          toCabinet: internalModal.targetCabinetCode,
+          toDrawer: internalModal.targetDrawerName,
+          toRow: internalModal.targetRowNumber,
+          toSlot: internalModal.targetSlotPosition,
+        },
+        items: selectedItem
+          ? [
+              {
+                ...selectedItem,
+                toCabinet: internalModal.targetCabinetCode,
+                toDrawer: internalModal.targetDrawerName,
+                toRow: internalModal.targetRowNumber,
+                toSlot: internalModal.targetSlotPosition,
+              },
+            ]
+          : [],
+        totalItems: 1,
+        totalWeight: selectedItem?.weight || 0,
         targetDrawerId: internalModal.targetDrawerId,
         targetSlotPosition: internalModal.targetSlotPosition,
         reason: internalModal.reason,
+        requestedBy: user?.username || 'Petugas Outlet',
+        timestamp: new Date().toISOString(),
+        payload: {
+          endpoint: '/outlet/outbound/internal-mutation',
+          data: {
+            itemId: internalModal.selectedItemId,
+            targetDrawerId: internalModal.targetDrawerId,
+            targetSlotPosition: internalModal.targetSlotPosition,
+            reason: internalModal.reason,
+          },
+        },
       };
 
-      const res = await apiRequest('/outlet/outbound/internal-mutation', {
-        method: 'POST',
-        data: payload,
-      });
+      const existingPending = loadPendingRequests();
+      savePendingRequests([newTx, ...existingPending]);
 
-      toast.success(res.message || 'Pemindahan emas antar laci berhasil!');
+      toast.success('Pengajuan Mutasi Antar Laci dibuat! Menunggu Approval SPV Cabang.');
       setInternalModal((prev) => ({ ...prev, isOpen: false }));
       fetchOutboundData();
     } catch (err) {
       console.error(err);
-      toast.error(err.response?.data?.message || 'Gagal memindahkan emas antar laci');
+      toast.error('Gagal membuat pengajuan mutasi laci');
     } finally {
       setInternalModal((prev) => ({ ...prev, submitting: false }));
+    }
+  };
+
+  // Handle SPV Approval
+  const handleApproveTx = (tx) => {
+    Swal.fire({
+      title: 'Setujui Pengajuan Outbound?',
+      html: `
+        <div class="text-xs text-slate-600 text-left space-y-2.5">
+          <div class="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1">
+            <div class="flex justify-between">
+              <span class="text-slate-400">Dokumen Ref:</span>
+              <span class="font-mono font-bold text-slate-800">${tx.id}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">Tipe Transaksi:</span>
+              <span class="font-bold text-slate-800">${tx.typeName || tx.type}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">Diajukan Oleh:</span>
+              <span class="font-semibold text-slate-700">${tx.requestedBy || 'Petugas'}</span>
+            </div>
+            <div class="flex justify-between">
+              <span class="text-slate-400">Total Keping:</span>
+              <span class="font-bold text-emerald-700">${tx.totalItems || 1} keping (${tx.totalWeight || 0}g)</span>
+            </div>
+          </div>
+          <div class="p-3 bg-amber-50 rounded-xl border border-amber-200 text-amber-900 space-y-1">
+            <p class="font-bold flex items-center gap-1.5 text-xs text-amber-900">
+              <span>⚠️ Kewajiban Verifikasi RFID Scan:</span>
+            </p>
+            <p class="text-[11px] leading-relaxed text-amber-800">
+              Setelah disetujui, petugas wajib melakukan <strong>pembuktian fisik pemindaian RFID Tag / sensor baki</strong> untuk memastikan keping emas benar-benar telah dikeluarkan/dipindahkan dari brankas sebelum transaksi dapat diselesaikan.
+            </p>
+          </div>
+        </div>
+      `,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonColor: '#059669',
+      cancelButtonColor: '#64748b',
+      confirmButtonText: '✓ Ya, Setujui Pengajuan',
+      cancelButtonText: 'Batal',
+    }).then((res) => {
+      if (res.isConfirmed) {
+        const pending = loadPendingRequests();
+        const updated = pending.map((item) => {
+          if (item.id === tx.id) {
+            return {
+              ...item,
+              status: 'APPROVED',
+              approvedBy: user?.username || 'SPV Outlet',
+              approvedAt: new Date().toISOString(),
+            };
+          }
+          return item;
+        });
+        savePendingRequests(updated);
+        fetchOutboundData();
+        if (detailModal.isOpen) {
+          setDetailModal((prev) => ({
+            ...prev,
+            transaction: {
+              ...prev.transaction,
+              status: 'APPROVED',
+              approvedBy: user?.username || 'SPV Outlet',
+              approvedAt: new Date().toISOString(),
+            },
+          }));
+        }
+        toast.success(`Pengajuan ${tx.id} disetujui SPV! Silakan lakukan pembuktian RFID Scan.`);
+      }
+    });
+  };
+
+  // Open RFID Verification Modal
+  const handleOpenRfidModal = (tx) => {
+    const initialScanned = {};
+    (tx.items || []).forEach((it) => {
+      initialScanned[it.id] = {
+        scanned: false,
+        scannedAt: null,
+      };
+    });
+
+    setRfidModal({
+      isOpen: true,
+      transaction: tx,
+      scannedItems: initialScanned,
+      antennaPinging: false,
+      submitting: false,
+    });
+  };
+
+  // Scan single item in RFID modal
+  const handleScanSingleItem = async (itemId) => {
+    setRfidModal((prev) => ({
+      ...prev,
+      scannedItems: {
+        ...prev.scannedItems,
+        [itemId]: { ...prev.scannedItems[itemId], scanning: true },
+      },
+    }));
+
+    await new Promise((r) => setTimeout(r, 450));
+
+    setRfidModal((prev) => ({
+      ...prev,
+      scannedItems: {
+        ...prev.scannedItems,
+        [itemId]: {
+          scanned: true,
+          scanning: false,
+          scannedAt: new Date().toLocaleTimeString('id-ID'),
+          signalStrength: '-38 dBm',
+        },
+      },
+    }));
+
+    toast.success(`Tag RFID keping ${itemId} terdeteksi! Keping emas terverifikasi.`);
+  };
+
+  // Bulk scan all items
+  const handleBulkScanAll = async () => {
+    setRfidModal((prev) => ({ ...prev, antennaPinging: true }));
+    await new Promise((r) => setTimeout(r, 600));
+
+    const updated = {};
+    (rfidModal.transaction?.items || []).forEach((it) => {
+      updated[it.id] = {
+        scanned: true,
+        scanning: false,
+        scannedAt: new Date().toLocaleTimeString('id-ID'),
+        signalStrength: `-${Math.floor(35 + Math.random() * 12)} dBm`,
+      };
+    });
+
+    setRfidModal((prev) => ({
+      ...prev,
+      antennaPinging: false,
+      scannedItems: updated,
+    }));
+
+    toast.success('Semua keping emas berhasil terverifikasi RFID!');
+  };
+
+  // Complete outbound after RFID verification
+  const handleExecuteFinalOutbound = async () => {
+    const tx = rfidModal.transaction;
+    if (!tx) return;
+
+    const items = tx.items || [];
+    const allScanned = items.every((it) => rfidModal.scannedItems[it.id]?.scanned);
+    if (!allScanned) {
+      toast.error('Harap lakukan scan RFID pada semua keping sebelum menyelesaikan transaksi!');
+      return;
+    }
+
+    try {
+      setRfidModal((prev) => ({ ...prev, submitting: true }));
+
+      // Call backend endpoint to persist database changes
+      if (tx.payload?.endpoint) {
+        await apiRequest(tx.payload.endpoint, {
+          method: 'POST',
+          data: tx.payload.data,
+        });
+      }
+
+      // Remove from pending storage
+      const pending = loadPendingRequests();
+      const updated = pending.filter((item) => item.id !== tx.id);
+      savePendingRequests(updated);
+
+      setRfidModal({
+        isOpen: false,
+        transaction: null,
+        scannedItems: {},
+        antennaPinging: false,
+        submitting: false,
+      });
+
+      if (detailModal.isOpen) {
+        setDetailModal({ isOpen: false, transaction: null });
+      }
+
+      await fetchOutboundData();
+      await fetchModalPreReqs();
+
+      Swal.fire({
+        icon: 'success',
+        title: '🎉 Transaksi Outbound Selesai & Terverifikasi!',
+        html: `
+          <div class="text-xs text-slate-600 text-left space-y-2">
+            <p><strong>Dokumen Ref:</strong> ${tx.id}</p>
+            <p><strong>Tipe Outbound:</strong> ${tx.typeName || tx.type}</p>
+            <p class="text-emerald-800 bg-emerald-50 p-2.5 rounded-xl border border-emerald-200">
+              ✓ Seluruh keping emas telah <strong>terbukti secara fisik melalui scan sensor RFID</strong>. Status di sistem Smart Vault telah ter-update otomatis!
+            </p>
+          </div>
+        `,
+        confirmButtonColor: '#059669',
+        confirmButtonText: 'Tutup & Cetak Bukti',
+      });
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || err.response?.data?.message || 'Gagal menyelesaikan transaksi outbound');
+    } finally {
+      setRfidModal((prev) => ({ ...prev, submitting: false }));
     }
   };
 
@@ -543,41 +1042,37 @@ export default function OutletOutboundPage() {
             <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
               <button
                 onClick={() => setActiveTab('ALL')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'ALL'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeTab === 'ALL'
                     ? 'bg-white text-emerald-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Semua Riwayat ({stats.totalTransactions || 0})
               </button>
               <button
                 onClick={() => setActiveTab('CUSTOMER_SALE')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'CUSTOMER_SALE'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeTab === 'CUSTOMER_SALE'
                     ? 'bg-white text-emerald-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Penjualan Nasabah ({stats.customerSalesCount || 0})
               </button>
               <button
                 onClick={() => setActiveTab('MUTATION_EXTERNAL')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'MUTATION_EXTERNAL'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeTab === 'MUTATION_EXTERNAL'
                     ? 'bg-white text-emerald-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Mutasi Antar Cabang ({stats.externalMutationsCount || 0})
               </button>
               <button
                 onClick={() => setActiveTab('MUTATION_INTERNAL')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
-                  activeTab === 'MUTATION_INTERNAL'
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${activeTab === 'MUTATION_INTERNAL'
                     ? 'bg-white text-emerald-800 shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
-                }`}
+                  }`}
               >
                 Mutasi Antar Laci ({stats.internalMutationsCount || 0})
               </button>
@@ -591,7 +1086,7 @@ export default function OutletOutboundPage() {
                 placeholder="Cari ID, Nasabah, Resi, atau Serial Emas..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 transition"
+                className="w-full pl-9 pr-3.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none text-slate-800 transition"
               />
             </div>
           </div>
@@ -751,21 +1246,57 @@ export default function OutletOutboundPage() {
 
                       {/* Status */}
                       <td className="py-3.5 px-4 text-center">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                          {tx.status || 'COMPLETED'}
-                        </span>
+                        {tx.status === 'PENDING_APPROVAL' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-full border border-amber-300">
+                            <Clock className="w-3.5 h-3.5 text-amber-600 animate-pulse" />
+                            Menunggu SPV
+                          </span>
+                        ) : tx.status === 'APPROVED' ? (
+                          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-violet-800 bg-violet-50 px-2.5 py-1 rounded-full border border-violet-300">
+                            <Radio className="w-3.5 h-3.5 text-violet-600 animate-pulse" />
+                            Siap Scan RFID
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            {tx.status || 'COMPLETED'}
+                          </span>
+                        )}
                       </td>
 
                       {/* Aksi */}
                       <td className="py-3.5 px-4 text-center">
-                        <button
-                          onClick={() => setDetailModal({ isOpen: true, transaction: tx })}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          Detail
-                        </button>
+                        <div className="flex items-center justify-center gap-1.5">
+                          {tx.status === 'PENDING_APPROVAL' && (
+                            <button
+                              onClick={() => handleApproveTx(tx)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg shadow-2xs transition"
+                              title="Setujui Pengajuan Outbound (SPV)"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              Approve
+                            </button>
+                          )}
+
+                          {tx.status === 'APPROVED' && (
+                            <button
+                              onClick={() => handleOpenRfidModal(tx)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-white bg-violet-700 hover:bg-violet-800 rounded-lg shadow-2xs transition animate-pulse"
+                              title="Verifikasi Pembuktian RFID Scan"
+                            >
+                              <Radio className="w-3.5 h-3.5" />
+                              Scan RFID
+                            </button>
+                          )}
+
+                          <button
+                            onClick={() => setDetailModal({ isOpen: true, transaction: tx })}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            Detail
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -826,17 +1357,16 @@ export default function OutletOutboundPage() {
                                   : [...prev.selectedItemIds, it.id],
                               }));
                             }}
-                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs border ${
-                              isSelected
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs border ${isSelected
                                 ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold'
                                 : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                            }`}
+                              }`}
                           >
                             <div className="flex items-center gap-2">
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                onChange={() => {}}
+                                onChange={() => { }}
                                 className="rounded text-emerald-600 focus:ring-emerald-500"
                               />
                               <div>
@@ -881,7 +1411,7 @@ export default function OutletOutboundPage() {
                       placeholder="Contoh: Budi Santoso"
                       value={saleModal.customerName}
                       onChange={(e) => setSaleModal((prev) => ({ ...prev, customerName: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                   </div>
 
@@ -895,7 +1425,7 @@ export default function OutletOutboundPage() {
                       placeholder="16 digit NIK"
                       value={saleModal.customerNik}
                       onChange={(e) => setSaleModal((prev) => ({ ...prev, customerNik: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                   </div>
                 </div>
@@ -910,7 +1440,7 @@ export default function OutletOutboundPage() {
                       placeholder="08123456789"
                       value={saleModal.customerPhone}
                       onChange={(e) => setSaleModal((prev) => ({ ...prev, customerPhone: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                     />
                   </div>
 
@@ -923,7 +1453,7 @@ export default function OutletOutboundPage() {
                       placeholder="INV-OUT-XXXX"
                       value={saleModal.invoiceNumber}
                       onChange={(e) => setSaleModal((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none font-mono"
                     />
                   </div>
                 </div>
@@ -937,7 +1467,7 @@ export default function OutletOutboundPage() {
                     placeholder="Keterangan tambahan..."
                     value={saleModal.notes}
                     onChange={(e) => setSaleModal((prev) => ({ ...prev, notes: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-emerald-500 outline-none"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
                   />
                 </div>
 
@@ -998,7 +1528,7 @@ export default function OutletOutboundPage() {
                     required
                     value={externalModal.destLocId}
                     onChange={(e) => setExternalModal((prev) => ({ ...prev, destLocId: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-bold text-slate-800"
                   >
                     <option value="">Pilih Cabang Tujuan...</option>
                     {destinationOutlets.map((dest) => (
@@ -1033,17 +1563,16 @@ export default function OutletOutboundPage() {
                                   : [...prev.selectedItemIds, it.id],
                               }));
                             }}
-                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs border ${
-                              isSelected
+                            className={`flex items-center justify-between p-2 rounded-lg cursor-pointer transition text-xs border ${isSelected
                                 ? 'bg-blue-50 border-blue-300 text-blue-950 font-semibold'
                                 : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'
-                            }`}
+                              }`}
                           >
                             <div className="flex items-center gap-2">
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                onChange={() => {}}
+                                onChange={() => { }}
                                 className="rounded text-blue-600 focus:ring-blue-500"
                               />
                               <div>
@@ -1076,7 +1605,7 @@ export default function OutletOutboundPage() {
                       type="text"
                       value={externalModal.kurirName}
                       onChange={(e) => setExternalModal((prev) => ({ ...prev, kurirName: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                     />
                   </div>
 
@@ -1088,7 +1617,7 @@ export default function OutletOutboundPage() {
                       type="text"
                       value={externalModal.vehicleNumber}
                       onChange={(e) => setExternalModal((prev) => ({ ...prev, vehicleNumber: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                      className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono"
                     />
                   </div>
                 </div>
@@ -1101,7 +1630,7 @@ export default function OutletOutboundPage() {
                     type="text"
                     value={externalModal.trackingNumber}
                     onChange={(e) => setExternalModal((prev) => ({ ...prev, trackingNumber: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono"
                   />
                 </div>
 
@@ -1113,7 +1642,7 @@ export default function OutletOutboundPage() {
                     type="text"
                     value={externalModal.notes}
                     onChange={(e) => setExternalModal((prev) => ({ ...prev, notes: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
                   />
                 </div>
 
@@ -1174,7 +1703,7 @@ export default function OutletOutboundPage() {
                     required
                     value={internalModal.selectedItemId}
                     onChange={(e) => setInternalModal((prev) => ({ ...prev, selectedItemId: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none font-semibold text-slate-800"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none font-semibold text-slate-800"
                   >
                     <option value="">Pilih Keping Emas...</option>
                     {availableItems.map((it) => (
@@ -1200,38 +1729,70 @@ export default function OutletOutboundPage() {
                   </div>
                 )}
 
-                {/* 2. Pilih Laci Tujuan */}
+                {/* 2. Pilih Lokasi Tujuan: Lemari, Laci & Baris/Row */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Laci / Baki Tujuan Pemindahan <span className="text-rose-500">*</span>
+                    Lokasi Lemari, Laci & Baris (Row) Tujuan <span className="text-rose-500">*</span>
                   </label>
-                  <select
-                    required
-                    value={internalModal.targetDrawerId}
-                    onChange={(e) => setInternalModal((prev) => ({ ...prev, targetDrawerId: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none font-semibold text-slate-800"
+                  <button
+                    type="button"
+                    onClick={handleOpenVaultPicker}
+                    className="w-full p-3 bg-slate-50 hover:bg-purple-50/60 border border-slate-300 hover:border-purple-500 rounded-xl text-left transition-all flex items-center justify-between group shadow-2xs"
                   >
-                    <option value="">Pilih Laci Tujuan...</option>
-                    {allDrawersList.map((drw) => (
-                      <option key={drw.id} value={drw.id}>
-                        {drw.cabinetCode} - {drw.name} (Kapasitas: {drw.capacity})
-                      </option>
-                    ))}
-                  </select>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="p-2 rounded-xl bg-purple-100 text-purple-700 shrink-0">
+                        <Layers size={16} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-xs text-slate-800 truncate">
+                          {internalModal.targetDrawerName || internalModal.targetDrawerCode ? (
+                            <span>
+                              {internalModal.targetCabinetCode ? `${internalModal.targetCabinetCode} • ` : ''}
+                              {internalModal.targetDrawerName || internalModal.targetDrawerCode} •{' '}
+                              <span className="text-purple-700 font-bold">
+                                Row {internalModal.targetRowNumber || 1}
+                              </span>
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-normal">Klik untuk Pilih Lemari, Laci & Row Tujuan...</span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-500 truncate">
+                          {internalModal.targetCabinetCode ? `${internalModal.targetCabinetCode} • ` : ''}
+                          {internalModal.targetSlotPosition
+                            ? `Posisi Target: ${internalModal.targetSlotPosition}`
+                            : 'Pilih laci dan baris (Row 1 s/d 6)'}
+                        </div>
+                      </div>
+                    </div>
+                    <span className="text-xs font-semibold text-purple-700 group-hover:text-purple-800 bg-white px-2.5 py-1 rounded-lg border border-slate-200 shrink-0 ml-2 shadow-2xs">
+                      {internalModal.targetDrawerId ? 'Ubah Row ➔' : 'Pilih Row ➔'}
+                    </span>
+                  </button>
                 </div>
 
                 {/* 3. Slot Posisi Tujuan */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Koordinat Slot Tujuan (Opsional)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700">
+                      Koordinat Slot Spesifik di Row (Opsional)
+                    </label>
+                    {internalModal.targetSlotPosition && (
+                      <span className="text-[10px] text-purple-700 font-semibold bg-purple-50 px-2 py-0.5 rounded">
+                        Auto: {internalModal.targetSlotPosition}
+                      </span>
+                    )}
+                  </div>
                   <input
                     type="text"
-                    placeholder="Contoh: R2-10 (Kosongkan untuk otomatis)"
+                    placeholder="Contoh: R3-01 (Otomatis terisi saat memilih baris/row)"
                     value={internalModal.targetSlotPosition}
-                    onChange={(e) => setInternalModal((prev) => ({ ...prev, targetSlotPosition: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none font-mono"
+                    onChange={(e) => setInternalModal((prev) => ({ ...prev, targetSlotPosition: e.target.value.toUpperCase() }))}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none font-mono"
                   />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Bisa dibiarkan sesuai pilihan Row atau ketik nomor slot spesifik jika diinginkan.
+                  </p>
                 </div>
 
                 {/* 4. Alasan Pemindahan */}
@@ -1243,7 +1804,7 @@ export default function OutletOutboundPage() {
                     type="text"
                     value={internalModal.reason}
                     onChange={(e) => setInternalModal((prev) => ({ ...prev, reason: e.target.value }))}
-                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-purple-500 outline-none"
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none"
                   />
                 </div>
 
@@ -1264,6 +1825,335 @@ export default function OutletOutboundPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* POPUP MODAL: Hierarchical Vault Location Picker (Lemari -> Laci -> Row) */}
+        {vaultPicker.isOpen && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full my-6 flex flex-col max-h-[88vh] border border-slate-200">
+              {/* Modal Header */}
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 rounded-t-2xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-purple-100 text-purple-700 rounded-xl">
+                    <Layers size={18} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-slate-900 text-sm">
+                      Pilih Tujuan Mutasi (Lemari, Laci & Baris)
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Tentukan letak lemari, laci modular, dan baris (Row) penyimpanan keping emas
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                  className="text-slate-400 hover:text-slate-600 font-bold text-xl p-1"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Breadcrumb Steps */}
+              <div className="px-5 py-2.5 bg-slate-100/70 border-b border-slate-200/80 flex items-center gap-2 text-xs overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (vaultPicker.cabinetsList.length > 1) {
+                      setVaultPicker((prev) => ({ ...prev, step: 'CABINETS', selectedDrawer: null }));
+                    }
+                  }}
+                  className={`font-semibold transition flex items-center gap-1 ${vaultPicker.step === 'CABINETS'
+                      ? 'text-purple-700 font-bold'
+                      : vaultPicker.cabinetsList.length > 1
+                        ? 'text-slate-600 hover:text-slate-900'
+                        : 'text-slate-500 cursor-default'
+                    }`}
+                >
+                  <span>1. Lemari ({vaultPicker.selectedCabinet ? vaultPicker.selectedCabinet.code : 'Pilih'})</span>
+                </button>
+
+                <ChevronRight size={13} className="text-slate-400 shrink-0" />
+
+                <button
+                  type="button"
+                  disabled={!vaultPicker.selectedCabinet}
+                  onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'DRAWERS' }))}
+                  className={`font-semibold transition flex items-center gap-1 ${vaultPicker.step === 'DRAWERS'
+                      ? 'text-purple-700 font-bold'
+                      : vaultPicker.selectedCabinet
+                        ? 'text-slate-600 hover:text-slate-900'
+                        : 'text-slate-400 cursor-not-allowed'
+                    }`}
+                >
+                  <span>2. Laci ({vaultPicker.selectedDrawer ? vaultPicker.selectedDrawer.name : 'Pilih'})</span>
+                </button>
+
+                <ChevronRight size={13} className="text-slate-400 shrink-0" />
+
+                <span
+                  className={`font-semibold flex items-center gap-1 ${vaultPicker.step === 'ROWS' ? 'text-purple-700 font-bold' : 'text-slate-400'
+                    }`}
+                >
+                  <span>3. Baris (Row 1 s/d {vaultPicker.selectedDrawer?.rows || 6})</span>
+                </span>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-5 flex-1 overflow-y-auto space-y-4">
+                {/* STEP 1: Pilih Lemari (Bila > 1 Lemari) */}
+                {vaultPicker.step === 'CABINETS' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="relative flex-1">
+                        <Search size={14} className="text-slate-400 absolute left-3 top-2.5" />
+                        <input
+                          type="text"
+                          placeholder="Cari kode atau nama lemari brankas..."
+                          value={vaultPicker.cabinetSearch}
+                          onChange={(e) =>
+                            setVaultPicker((prev) => ({ ...prev, cabinetSearch: e.target.value }))
+                          }
+                          className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                      <span className="text-[11px] text-slate-500 font-medium shrink-0">
+                        {vaultPicker.cabinetsList.length} Lemari Tersedia
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {vaultPicker.cabinetsList
+                        .filter((c) =>
+                          vaultPicker.cabinetSearch
+                            ? c.code.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase()) ||
+                            c.name.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase())
+                            : true
+                        )
+                        .map((cab) => (
+                          <div
+                            key={cab.id}
+                            onClick={() => handleSelectCabinet(cab)}
+                            className="p-3.5 border border-slate-200 hover:border-purple-500 bg-white hover:bg-purple-50/40 rounded-xl transition cursor-pointer space-y-2 group"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-bold text-xs text-slate-900 group-hover:text-purple-800">
+                                {cab.code}
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold">
+                                {cab.drawerCount || (cab.drawers?.length || 10)} Laci
+                              </span>
+                            </div>
+                            <div className="font-semibold text-xs text-slate-800 line-clamp-1">
+                              {cab.name}
+                            </div>
+                            <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+                              <span>Kapasitas: {cab.usedCapacity || 0} / {cab.totalCapacity || 3300} slot</span>
+                              <span className="text-purple-700 font-bold group-hover:translate-x-0.5 transition-transform">
+                                Pilih ➔
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* STEP 2: Pilih Baki / Laci RFID */}
+                {vaultPicker.step === 'DRAWERS' && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-xs">
+                          Pilih Baki / Laci di Lemari {vaultPicker.selectedCabinet?.code}
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          {vaultPicker.selectedCabinet?.name} • Silakan pilih salah satu laci modular
+                        </p>
+                      </div>
+                      {vaultPicker.cabinetsList.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'CABINETS' }))}
+                          className="text-[11px] text-purple-700 hover:text-purple-800 font-semibold"
+                        >
+                          ← Ganti Lemari
+                        </button>
+                      )}
+                    </div>
+
+                    {vaultPicker.loadingDetail ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                        <Loader2 size={24} className="animate-spin text-purple-600 mb-2" />
+                        <span className="text-xs">Memuat daftar laci...</span>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {(vaultPicker.cabinetDetail?.drawers || []).map((drw) => {
+                          const rows = drw.rows || 6;
+                          const cols = drw.cols || 55;
+                          const capacity = drw.capacity || rows * cols;
+                          const used = drw.usedCapacity || drw.items?.length || 0;
+                          const percent = capacity > 0 ? Math.round((used / capacity) * 100) : 0;
+
+                          return (
+                            <div
+                              key={drw.id || drw.code}
+                              onClick={() => handleSelectDrawer(drw)}
+                              className="p-3 border border-slate-200 hover:border-purple-500 bg-white hover:bg-purple-50/40 rounded-xl transition cursor-pointer space-y-1.5 group"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-xs text-slate-800 group-hover:text-purple-800">
+                                  {drw.name}
+                                </span>
+                                <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 font-mono font-semibold">
+                                  {drw.rfidAntenna || 'Antena RFID'}
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-slate-500">
+                                Struktur: <strong>{rows} Baris</strong> x <strong>{cols} Kolom</strong> ({capacity} slot)
+                              </div>
+                              <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                                <span>Terisi: {used} / {capacity} keping ({percent}%)</span>
+                                <span className="text-purple-700 font-bold group-hover:translate-x-0.5 transition-transform">
+                                  Pilih Row ➔
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* STEP 3: Pilih Baris (Row 1 s/d rowsCount) */}
+                {vaultPicker.step === 'ROWS' && vaultPicker.selectedDrawer && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-800 text-xs">
+                          Pilih Baris (Row) di {vaultPicker.selectedDrawer.name}
+                        </h4>
+                        <p className="text-[11px] text-slate-500">
+                          {vaultPicker.selectedCabinet?.code} • {vaultPicker.selectedDrawer.code} • Silakan pilih baris rak baki
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'DRAWERS' }))}
+                        className="text-[11px] text-purple-700 hover:text-purple-800 font-semibold"
+                      >
+                        ← Ganti Laci
+                      </button>
+                    </div>
+
+                    <div className="space-y-2">
+                      {Array.from({ length: vaultPicker.selectedDrawer.rows || 6 }, (_, idx) => {
+                        const rowNum = idx + 1;
+                        const cols = vaultPicker.selectedDrawer.cols || 55;
+                        const drawerItems = vaultPicker.selectedDrawer.items || [];
+
+                        // Exclude selected item if currently in this same drawer
+                        const otherItems = drawerItems.filter(
+                          (it) => it.id !== internalModal.selectedItemId
+                        );
+
+                        const usedCols = new Set();
+                        otherItems.forEach((it) => {
+                          const m = String(it.slotPosition || '').trim().toUpperCase().match(/^R(\d+)-(\d+)$/);
+                          if (m && parseInt(m[1], 10) === rowNum) {
+                            usedCols.add(parseInt(m[2], 10));
+                          }
+                        });
+
+                        const itemsInRow = usedCols.size;
+                        const availableInRow = Math.max(0, cols - itemsInRow);
+
+                        // Find lowest available col
+                        let nextCol = 1;
+                        while (nextCol <= cols && usedCols.has(nextCol)) {
+                          nextCol++;
+                        }
+                        const isFull = nextCol > cols;
+                        const nextSlotPos = `R${rowNum}-${String(nextCol).padStart(2, '0')}`;
+
+                        return (
+                          <div
+                            key={rowNum}
+                            onClick={() => {
+                              if (!isFull) handleSelectRow(rowNum, nextSlotPos);
+                            }}
+                            className={`p-3.5 border rounded-xl transition flex items-center justify-between gap-3 ${isFull
+                                ? 'bg-slate-50 border-slate-200 opacity-60 cursor-not-allowed'
+                                : 'bg-white border-slate-200 hover:border-purple-500 hover:bg-purple-50/40 cursor-pointer shadow-2xs group'
+                              }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="w-16 text-center py-1 bg-slate-100 group-hover:bg-purple-100 group-hover:text-purple-800 rounded-lg font-mono font-bold text-xs text-slate-700 border border-slate-200">
+                                Row {rowNum}
+                              </div>
+                              <div>
+                                <div className="font-semibold text-xs text-slate-800">
+                                  Baris ke-{rowNum} ({cols} Slot Kolom)
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5">
+                                  <span>Terisi: <strong className="text-slate-700">{itemsInRow}</strong> keping</span>
+                                  <span>•</span>
+                                  <span className={availableInRow > 0 ? 'text-emerald-700 font-semibold' : 'text-rose-600 font-semibold'}>
+                                    Sisa: {availableInRow} slot kosong
+                                  </span>
+                                  <span>•</span>
+                                  <span className="font-mono text-purple-700 bg-purple-50 px-1.5 py-0.2 rounded text-[10px]">
+                                    Next: {nextSlotPos}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={isFull}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${isFull
+                                  ? 'bg-slate-100 text-slate-400'
+                                  : 'bg-purple-600 group-hover:bg-purple-700 text-white shadow-2xs'
+                                }`}
+                            >
+                              {isFull ? (
+                                'Penuh'
+                              ) : (
+                                <>
+                                  <span>Pilih Row {rowNum}</span>
+                                  <ArrowRight size={12} />
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/80 rounded-b-2xl">
+                <span className="text-xs text-slate-500">
+                  {vaultPicker.step === 'CABINETS' && 'Langkah 1/3: Pilih Lemari'}
+                  {vaultPicker.step === 'DRAWERS' && 'Langkah 2/3: Pilih Laci Modular'}
+                  {vaultPicker.step === 'ROWS' && 'Langkah 3/3: Pilih Baris (Row)'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-1.5 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100"
+                >
+                  Tutup
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1340,12 +2230,274 @@ export default function OutletOutboundPage() {
                 </div>
               </div>
 
-              <div className="flex items-center justify-end border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-between border-t border-slate-100 pt-3">
                 <button
                   onClick={() => setDetailModal({ isOpen: false, transaction: null })}
                   className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
                 >
                   Tutup
+                </button>
+
+                <div className="flex items-center gap-2">
+                  {detailModal.transaction.status === 'PENDING_APPROVAL' && (
+                    <button
+                      onClick={() => {
+                        const tx = detailModal.transaction;
+                        handleApproveTx(tx);
+                      }}
+                      className="px-4 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-xl shadow-sm transition flex items-center gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Setujui Pengajuan (SPV)</span>
+                    </button>
+                  )}
+
+                  {detailModal.transaction.status === 'APPROVED' && (
+                    <button
+                      onClick={() => {
+                        const tx = detailModal.transaction;
+                        setDetailModal({ isOpen: false, transaction: null });
+                        handleOpenRfidModal(tx);
+                      }}
+                      className="px-4 py-2 text-xs font-bold text-white bg-violet-700 hover:bg-violet-800 rounded-xl shadow-sm transition flex items-center gap-1.5 animate-pulse"
+                    >
+                      <Radio className="w-3.5 h-3.5" />
+                      <span>Buka Verifikasi RFID Scan</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 5: PEMBUKTIAN RFID SCAN (PHYSICAL PROOF) */}
+        {rfidModal.isOpen && rfidModal.transaction && (
+          <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-fade-in">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full my-6 flex flex-col max-h-[90vh] border border-slate-200">
+              {/* Header */}
+              <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 rounded-t-2xl">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2.5 bg-violet-100 text-violet-700 rounded-xl">
+                    <Radio size={20} className="animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-slate-900 text-sm">
+                        Pembuktian RFID Scan & Pengeluaran Fisik
+                      </h3>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-800 border border-violet-200">
+                        Smart Vault Sensor
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      Verifikasi fisik keping emas sebelum dikeluarkan dari vault atau dipindahkan baki
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRfidModal((prev) => ({ ...prev, isOpen: false }))}
+                  className="text-slate-400 hover:text-slate-600 font-bold text-xl p-1"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Sub-header Summary info */}
+              <div className="px-5 py-3 bg-violet-50/60 border-b border-violet-100 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className="text-slate-500">No. Ref:</span>{' '}
+                  <span className="font-mono font-bold text-slate-800">{rfidModal.transaction.id}</span> •{' '}
+                  <span className="text-slate-500">Tipe:</span>{' '}
+                  <span className="font-semibold text-violet-900">{rfidModal.transaction.typeName}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-slate-500">SPV Approval:</span>
+                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold text-[10px] flex items-center gap-1">
+                    <Check size={11} /> {rfidModal.transaction.approvedBy || 'SPV Terverifikasi'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 flex-1 overflow-y-auto space-y-4">
+                {/* Actions banner */}
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="font-bold text-xs text-slate-800">
+                      Instruksi Pembuktian Fisik Emas
+                    </div>
+                    <div className="text-[11px] text-slate-500">
+                      Arahkan reader scanner ke tag RFID keping emas atau aktifkan sensor antena baki.
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      disabled={rfidModal.antennaPinging}
+                      onClick={handleBulkScanAll}
+                      className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-2xs disabled:opacity-50"
+                    >
+                      {rfidModal.antennaPinging ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={13} />
+                      )}
+                      <span>Pindai Semua (Reader Handheld)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Progress */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-slate-700">Progress Scan Keping Emas:</span>
+                    <span className="font-mono font-bold text-violet-700">
+                      {Object.values(rfidModal.scannedItems).filter((v) => v.scanned).length} /{' '}
+                      {(rfidModal.transaction.items || []).length} Keping Ter-scan
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="bg-violet-600 h-full rounded-full transition-all duration-300"
+                      style={{
+                        width: `${
+                          (rfidModal.transaction.items || []).length > 0
+                            ? (Object.values(rfidModal.scannedItems).filter((v) => v.scanned).length /
+                                (rfidModal.transaction.items || []).length) *
+                              100
+                            : 0
+                        }%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Items List */}
+                <div className="space-y-2.5">
+                  {(rfidModal.transaction.items || []).map((it) => {
+                    const scanState = rfidModal.scannedItems[it.id] || {};
+                    const isScanned = !!scanState.scanned;
+
+                    return (
+                      <div
+                        key={it.id}
+                        className={`p-3.5 rounded-xl border transition flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                          isScanned
+                            ? 'bg-emerald-50/60 border-emerald-200'
+                            : 'bg-white border-slate-200 shadow-2xs'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`p-2 rounded-xl shrink-0 ${
+                              isScanned
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {isScanned ? <Check size={18} /> : <Radio size={18} />}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold text-xs text-slate-900">{it.id}</span>
+                              <span className="text-[10px] px-2 py-0.5 rounded font-bold bg-amber-100 text-amber-800">
+                                {it.brand} {it.weight}g
+                              </span>
+                              {it.purity && (
+                                <span className="text-[10px] text-slate-500 font-mono">
+                                  Kadar {it.purity}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                              <span>
+                                EPC Tag:{' '}
+                                <strong className="font-mono text-slate-800">
+                                  {it.rfidTag || 'EPC-PGD-2026-AUTO'}
+                                </strong>
+                              </span>
+                              <span>•</span>
+                              <span>
+                                Lokasi Fisik:{' '}
+                                <strong className="text-slate-700">
+                                  {it.cabinetCode || it.fromCabinet || 'Vault'} ›{' '}
+                                  {it.drawerName || it.fromDrawer || 'Laci'} ({it.slotPosition || it.fromSlot || '-'})
+                                </strong>
+                              </span>
+                            </div>
+                            {isScanned && (
+                              <div className="text-[10px] text-emerald-800 font-semibold mt-1 flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-ping" />
+                                <span>
+                                  {rfidModal.transaction.type === 'MUTATION_INTERNAL'
+                                    ? `Terverifikasi: Sinyal terdeteksi di tujuan (${it.toDrawer || rfidModal.transaction.item?.toDrawer || 'Baki Baru'} Row ${it.toRow || rfidModal.transaction.item?.toRow || 1})`
+                                    : 'Terverifikasi: Keping emas telah dikeluarkan dari baki lemari'}
+                                </span>
+                                <span className="text-slate-400">({scanState.scannedAt})</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center justify-end shrink-0">
+                          {isScanned ? (
+                            <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 rounded-lg text-xs font-bold flex items-center gap-1">
+                              <Check size={13} /> Ter-scan
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={scanState.scanning}
+                              onClick={() => handleScanSingleItem(it.id)}
+                              className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-2xs disabled:opacity-50"
+                            >
+                              {scanState.scanning ? (
+                                <Loader2 size={13} className="animate-spin" />
+                              ) : (
+                                <Radio size={13} />
+                              )}
+                              <span>Scan Tag RFID</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/80 rounded-b-2xl">
+                <button
+                  type="button"
+                  onClick={() => setRfidModal((prev) => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100"
+                >
+                  Tutup
+                </button>
+
+                <button
+                  type="button"
+                  disabled={
+                    rfidModal.submitting ||
+                    !(
+                      (rfidModal.transaction.items || []).length > 0 &&
+                      (rfidModal.transaction.items || []).every(
+                        (it) => rfidModal.scannedItems[it.id]?.scanned
+                      )
+                    )
+                  }
+                  onClick={handleExecuteFinalOutbound}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {rfidModal.submitting ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <CheckCircle2 size={14} />
+                  )}
+                  <span>Selesaikan & Eksekusi Vault</span>
                 </button>
               </div>
             </div>

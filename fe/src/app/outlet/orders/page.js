@@ -7,7 +7,8 @@ import {
   ShoppingCart, Plus, ChevronRight, FileText, Clock, CheckCircle,
   XCircle, Truck, Package, AlertCircle, Trash2, Send, Eye,
   RefreshCw, ChevronDown, Loader2, MapPin, Radio, Sparkles,
-  QrCode, Layers, Building2, Check, ShieldCheck
+  QrCode, Layers, Building2, Check, ShieldCheck, Search,
+  ArrowLeft, Box, Sliders, X, ChevronLeft
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Swal from 'sweetalert2';
@@ -224,30 +225,73 @@ function RfidPairingModal({ po, onClose, onSuccess }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [drawers, setDrawers] = useState([]);
-  const [pairingStates, setPairingStates] = useState({}); // { [itemId]: { rfidTag, drawerCode, submitting } }
+  const [cabinets, setCabinets] = useState([]);
+  const [pairingStates, setPairingStates] = useState({}); // { [itemId]: { rfidTag, drawerCode, drawerName, cabinetCode, cabinetName, rowNumber, slotPosition, submitting } }
+
+  // Vault Location Picker Modal (Lemari -> Laci -> Row)
+  const [vaultPicker, setVaultPicker] = useState({
+    isOpen: false,
+    targetItemId: null,
+    step: 'CABINETS', // 'CABINETS' | 'DRAWERS' | 'ROWS'
+    cabinetsList: [],
+    loadingCabinets: false,
+    cabinetSearch: '',
+    selectedCabinet: null,
+    cabinetDetail: null,
+    loadingDetail: false,
+    selectedDrawer: null,
+  });
 
   const fetchDetail = useCallback(async () => {
     try {
       setLoading(true);
-      const [orderRes, drawerRes] = await Promise.all([
+      const [orderRes, drawerRes, cabinetRes] = await Promise.all([
         apiRequest(`/outlet/orders/${po.id}`),
         apiRequest(`/outlet/orders/drawers?locationId=${po.destLocId}`),
+        apiRequest(`/outlet/cabinets?outletLocationId=${po.destLocId}`),
       ]);
 
       const poData = orderRes.data;
+      const drawersList = drawerRes.data || [];
+      const cabsList = cabinetRes.data?.cabinets || (Array.isArray(cabinetRes.data) ? cabinetRes.data : []);
+
       setDetail(poData);
-      setDrawers(drawerRes.data || []);
+      setDrawers(drawersList);
+      setCabinets(cabsList);
+
+      const defaultDrawer = drawersList[0];
+      const defaultCab = cabsList[0];
 
       // Inisialisasi pairing inputs untuk item yang belum dipairing
       const initialStates = {};
+      const validOutletDrawerCodes = drawersList.map((d) => d.code);
+
       (poData.items || []).forEach((poi, index) => {
         const item = poi.item;
-        const defaultDrawer = (drawerRes.data && drawerRes.data[0]?.code) || '';
         const autoEpc = `EPC-PGD-2026-${Math.floor(100000 + Math.random() * 900000)}`;
+
+        const itemDrawerCode = item?.drawer?.code;
+        const isAlreadyInOutlet = validOutletDrawerCodes.includes(itemDrawerCode);
+        const assignedDrawerCode = isAlreadyInOutlet ? itemDrawerCode : defaultDrawer?.code;
+        const matchedDrawerObj = drawersList.find((d) => d.code === assignedDrawerCode) || defaultDrawer;
+
+        let rowNum = 1;
+        let slotPos = item?.slotPosition;
+        if (slotPos) {
+          const m = slotPos.match(/^R(\d+)-/i);
+          if (m) rowNum = parseInt(m[1], 10);
+        } else {
+          slotPos = `R${rowNum}-01`;
+        }
 
         initialStates[item.id] = {
           rfidTag: item.rfidTag || autoEpc,
-          drawerCode: item.drawer?.code || defaultDrawer,
+          drawerCode: assignedDrawerCode || '',
+          drawerName: matchedDrawerObj?.name || 'Laci 01',
+          cabinetCode: matchedDrawerObj?.cabinetCode || defaultCab?.code || 'CAB-OUTLET-JKT-01',
+          cabinetName: matchedDrawerObj?.cabinetName || defaultCab?.name || 'Lemari RFID Vault 01',
+          rowNumber: rowNum,
+          slotPosition: slotPos,
           submitting: false,
         };
       });
@@ -277,6 +321,124 @@ function RfidPairingModal({ po, onClose, onSuccess }) {
     toast.success('Tag RFID EPC baru di-generate');
   };
 
+  // Open Hierarchical Vault Location Picker (Lemari -> Laci -> Row)
+  const handleOpenVaultPicker = async (itemId) => {
+    let cabs = cabinets;
+    if (cabs.length === 0) {
+      try {
+        const res = await apiRequest(`/outlet/cabinets?outletLocationId=${po.destLocId}`);
+        cabs = res.data?.cabinets || (Array.isArray(res.data) ? res.data : []);
+        setCabinets(cabs);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Jika hanya ada 1 lemari, langsung buka daftar laci lemari tersebut
+    if (cabs.length === 1) {
+      const singleCab = cabs[0];
+      setVaultPicker({
+        isOpen: true,
+        targetItemId: itemId,
+        step: 'DRAWERS',
+        cabinetsList: cabs,
+        loadingCabinets: false,
+        cabinetSearch: '',
+        selectedCabinet: singleCab,
+        cabinetDetail: null,
+        loadingDetail: true,
+        selectedDrawer: null,
+      });
+
+      try {
+        const res = await apiRequest(`/outlet/cabinets/${singleCab.code}`);
+        const detail = res.data?.cabinet || res.data;
+        setVaultPicker((prev) => ({
+          ...prev,
+          cabinetDetail: detail,
+          loadingDetail: false,
+        }));
+      } catch (err) {
+        console.error(err);
+        setVaultPicker((prev) => ({ ...prev, loadingDetail: false }));
+      }
+    } else {
+      // Jika lebih dari 1 lemari, tampilkan pilihan lemari terlebih dahulu
+      setVaultPicker({
+        isOpen: true,
+        targetItemId: itemId,
+        step: 'CABINETS',
+        cabinetsList: cabs,
+        loadingCabinets: false,
+        cabinetSearch: '',
+        selectedCabinet: null,
+        cabinetDetail: null,
+        loadingDetail: false,
+        selectedDrawer: null,
+      });
+    }
+  };
+
+  const handleSelectCabinet = async (cab) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedCabinet: cab,
+      step: 'DRAWERS',
+      loadingDetail: true,
+      selectedDrawer: null,
+    }));
+
+    try {
+      const res = await apiRequest(`/outlet/cabinets/${cab.code}`);
+      const detail = res.data?.cabinet || res.data;
+      setVaultPicker((prev) => ({
+        ...prev,
+        cabinetDetail: detail,
+        loadingDetail: false,
+      }));
+    } catch (err) {
+      console.error(err);
+      toast.error(`Gagal memuat detail laci lemari ${cab.code}`);
+      setVaultPicker((prev) => ({ ...prev, loadingDetail: false }));
+    }
+  };
+
+  const handleSelectDrawer = (drw) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedDrawer: drw,
+      step: 'ROWS',
+    }));
+  };
+
+  const handleSelectRow = (rowNum, nextSlotPos) => {
+    const targetId = vaultPicker.targetItemId;
+    const cab = vaultPicker.selectedCabinet;
+    const drw = vaultPicker.selectedDrawer;
+
+    if (targetId) {
+      setPairingStates((prev) => ({
+        ...prev,
+        [targetId]: {
+          ...prev[targetId],
+          drawerCode: drw?.code || '',
+          drawerName: drw?.name || 'Laci',
+          cabinetCode: cab?.code || drw?.cabinetCode || '',
+          cabinetName: cab?.name || drw?.cabinetName || '',
+          rowNumber: rowNum,
+          slotPosition: nextSlotPos,
+        },
+      }));
+
+      toast.success(`Lokasi terpilih: ${drw?.name || drw?.code} • Row ${rowNum} (${nextSlotPos})`);
+    }
+
+    setVaultPicker((prev) => ({
+      ...prev,
+      isOpen: false,
+    }));
+  };
+
   const handlePairItem = async (itemId) => {
     const state = pairingStates[itemId];
     if (!state?.rfidTag) return toast.error('Nomor RFID Tag wajib diisi');
@@ -294,10 +456,12 @@ function RfidPairingModal({ po, onClose, onSuccess }) {
           itemId,
           rfidTag: state.rfidTag,
           drawerCode: state.drawerCode,
+          slotPosition: state.slotPosition,
+          rowNumber: state.rowNumber,
         }),
       });
 
-      toast.success(`Keping ${itemId} berhasil dipairing dengan RFID!`);
+      toast.success(`Keping ${itemId} berhasil dipairing dengan RFID di ${res.data?.drawer?.name || state.drawerCode}!`);
 
       // Refresh detail
       const updatedRes = await apiRequest(`/outlet/orders/${po.id}`);
@@ -332,182 +496,508 @@ function RfidPairingModal({ po, onClose, onSuccess }) {
   const progressPercent = totalItems > 0 ? Math.round((pairedItems / totalItems) * 100) : 0;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-8 flex flex-col max-h-[92vh]">
-        {/* Header */}
-        <div className="p-6 border-b border-slate-100 flex items-center justify-between">
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200 mb-1">
-              <Radio size={12} className="animate-pulse" />
-              <span>Penerimaan Barang & Pairing RFID Tag (Cabang)</span>
+    <>
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 overflow-y-auto">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl my-8 flex flex-col max-h-[92vh]">
+          {/* Header */}
+          <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 text-[11px] font-semibold border border-emerald-200 mb-1">
+                <Radio size={12} className="animate-pulse" />
+                <span>Penerimaan Barang & Pairing RFID Tag (Cabang)</span>
+              </div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <span>PO: {po.id}</span>
+                <span className="text-slate-400 font-normal">•</span>
+                <span className="text-slate-600 font-medium text-xs">{po.destLocation?.name}</span>
+              </h2>
             </div>
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <span>PO: {po.id}</span>
-              <span className="text-slate-400 font-normal">•</span>
-              <span className="text-slate-600 font-medium text-xs">{po.destLocation?.name}</span>
-            </h2>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl font-bold p-1">×</button>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl font-bold p-1">×</button>
-        </div>
 
-        {/* Info & Progress Bar */}
-        <div className="px-6 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-          <div>
-            <span className="text-slate-500">Asal:</span> <span className="font-semibold text-slate-800">HO Vault</span> •{' '}
-            <span className="text-slate-500">No. Surat Jalan / Resi:</span>{' '}
-            <span className="font-mono font-bold text-slate-800">{po.trackingNumber || 'PGD-EXP-HO-001'}</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="font-medium text-slate-700">Progress Pairing:</span>
-            <span className="font-bold text-emerald-700">{pairedItems} / {totalItems} Keping ({progressPercent}%)</span>
-            <div className="w-24 bg-slate-200 rounded-full h-2 overflow-hidden">
-              <div className="bg-emerald-600 h-full rounded-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
+          {/* Info & Progress Bar */}
+          <div className="px-6 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+            <div>
+              <span className="text-slate-500">Asal:</span> <span className="font-semibold text-slate-800">HO Vault</span> •{' '}
+              <span className="text-slate-500">No. Surat Jalan / Resi:</span>{' '}
+              <span className="font-mono font-bold text-slate-800">{po.trackingNumber || 'PGD-EXP-HO-001'}</span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-medium text-slate-700">Progress Pairing:</span>
+              <span className="font-bold text-emerald-700">{pairedItems} / {totalItems} Keping ({progressPercent}%)</span>
+              <div className="w-24 bg-slate-200 rounded-full h-2 overflow-hidden">
+                <div className="bg-emerald-600 h-full rounded-full transition-all duration-300" style={{ width: `${progressPercent}%` }} />
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Content List of Items */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
-              <Loader2 size={24} className="animate-spin text-emerald-700 mb-2" />
-              <span className="text-xs">Memuat keping fisik emas dari HO...</span>
-            </div>
-          ) : items.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 text-xs">
-              Tidak ada item keping fisik yang terlampir pada PO ini.
-            </div>
-          ) : (
-            items.map((poi, idx) => {
-              const item = poi.item;
-              const isPaired = !!item?.rfidTag;
-              const state = pairingStates[item?.id] || {};
+          {/* Content List of Items */}
+          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Loader2 size={24} className="animate-spin text-emerald-700 mb-2" />
+                <span className="text-xs">Memuat keping fisik emas dari HO...</span>
+              </div>
+            ) : items.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                Tidak ada item keping fisik yang terlampir pada PO ini.
+              </div>
+            ) : (
+              items.map((poi, idx) => {
+                const item = poi.item;
+                const isPaired = !!item?.rfidTag;
+                const state = pairingStates[item?.id] || {};
 
-              return (
-                <div
-                  key={poi.id}
-                  className={`p-4 rounded-xl border transition-all ${isPaired
+                return (
+                  <div
+                    key={poi.id}
+                    className={`p-4 rounded-xl border transition-all ${isPaired
                       ? 'bg-emerald-50/50 border-emerald-200'
                       : 'bg-white border-slate-200 shadow-sm'
-                    }`}
-                >
-                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                    <div className="flex items-start gap-3">
-                      <div className={`p-2.5 rounded-xl ${isPaired ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-                        {isPaired ? <Check size={18} /> : <QrCode size={18} />}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-sm text-slate-900">{item?.id}</span>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
-                            QR HO Terverifikasi
-                          </span>
+                      }`}
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                      <div className="flex items-start gap-3">
+                        <div className={`p-2.5 rounded-xl ${isPaired ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
+                          {isPaired ? <Check size={18} /> : <QrCode size={18} />}
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">
-                          {item?.brand} • {item?.weight} Gram • Kadar {item?.purity || '999.9'}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      {isPaired ? (
-                        <div className="text-right">
-                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
-                            <Radio size={12} /> Ter-pairing RFID
-                          </span>
-                          <div className="text-[11px] font-mono text-emerald-900 mt-1">
-                            EPC: <span className="font-bold">{item.rfidTag}</span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-sm text-slate-900">{item?.id}</span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800">
+                              QR HO Terverifikasi
+                            </span>
+                          </div>
+                          <div className="text-xs text-slate-500 mt-0.5">
+                            {item?.brand} • {item?.weight} Gram • Kadar {item?.purity || '999.9'}
                           </div>
                         </div>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                          <Clock size={11} /> Belum Pairing RFID
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Pairing Controls */}
-                  {isPaired ? (
-                    <div className="pt-3 flex items-center justify-between text-xs text-slate-600">
-                      <div>
-                        Lokasi Brankas Cabang:{' '}
-                        <span className="font-bold text-slate-800">
-                          {item?.drawer?.name || item?.drawerId} (Antena: {item?.drawer?.rfidAntenna || 'ANT-01'})
-                        </span>
                       </div>
-                      <span className="text-emerald-700 font-semibold text-[11px]">✓ Aktif di Vault Outlet</span>
+
+                      <div>
+                        {isPaired ? (
+                          <div className="text-right">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                              <Radio size={12} /> Ter-pairing RFID
+                            </span>
+                            <div className="text-[11px] font-mono text-emerald-900 mt-1">
+                              EPC: <span className="font-bold">{item.rfidTag}</span>
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            <Clock size={11} /> Belum Pairing RFID
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  ) : (
-                    <div className="pt-3.5 grid grid-cols-1 md:grid-cols-12 gap-3 items-end text-xs">
-                      <div className="md:col-span-5">
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="font-semibold text-slate-700">Tag RFID (EPC Number)</label>
+
+                    {/* Pairing Controls */}
+                    {isPaired ? (
+                      <div className="pt-3 flex items-center justify-between text-xs text-slate-600">
+                        <div>
+                          Lokasi Brankas Cabang:{' '}
+                          <span className="font-bold text-slate-800">
+                            {item?.drawer?.name || item?.drawerId}
+                            {item?.slotPosition ? ` • Slot ${item.slotPosition}` : ''} (Antena: {item?.drawer?.rfidAntenna || 'ANT-01'})
+                          </span>
+                        </div>
+                        <span className="text-emerald-700 font-semibold text-[11px]">✓ Aktif di Vault Outlet</span>
+                      </div>
+                    ) : (
+                      <div className="pt-3.5 grid grid-cols-1 md:grid-cols-12 gap-3 items-end text-xs">
+                        <div className="md:col-span-4">
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="font-semibold text-slate-700">Tag RFID (EPC Number)</label>
+                            <button
+                              type="button"
+                              onClick={() => handleAutoGenerateTag(item.id)}
+                              className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-0.5"
+                            >
+                              <Sparkles size={11} /> Auto-Generate
+                            </button>
+                          </div>
+                          <input
+                            type="text"
+                            value={state.rfidTag || ''}
+                            onChange={(e) => handleInputChange(item.id, 'rfidTag', e.target.value.toUpperCase())}
+                            placeholder="Contoh: EPC-PGD-2026-XXXXX"
+                            className="w-full p-2 border border-slate-300 rounded-lg font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                          />
+                        </div>
+
+                        {/* Hierarchical Picker Button: Lemari -> Laci -> Row */}
+                        <div className="md:col-span-5">
+                          <label className="block font-semibold text-slate-700 mb-1">
+                            Lokasi Lemari, Baki & Row
+                          </label>
                           <button
                             type="button"
-                            onClick={() => handleAutoGenerateTag(item.id)}
-                            className="text-[10px] text-emerald-700 hover:text-emerald-800 font-semibold flex items-center gap-0.5"
+                            onClick={() => handleOpenVaultPicker(item.id)}
+                            className="w-full p-2 bg-slate-50 hover:bg-emerald-50/60 border border-slate-300 hover:border-emerald-500 rounded-lg text-left transition-all flex items-center justify-between group shadow-2xs"
                           >
-                            <Sparkles size={11} /> Auto-Generate
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="p-1 rounded-md bg-emerald-100 text-emerald-800 shrink-0">
+                                <Layers size={13} />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-xs text-slate-800 truncate">
+                                  {state.drawerName || state.drawerCode ? (
+                                    <span>
+                                      {state.drawerName || state.drawerCode} • <span className="text-emerald-700 font-bold">Row {state.rowNumber || 1}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400 font-normal">Pilih Laci & Row...</span>
+                                  )}
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  {state.cabinetCode ? `${state.cabinetCode} • ` : ''}
+                                  {state.slotPosition ? `Slot Posisi: ${state.slotPosition}` : 'Klik untuk memilih baris baki'}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-semibold text-emerald-700 group-hover:text-emerald-800 bg-white px-2 py-0.5 rounded border border-slate-200 shrink-0 ml-1">
+                              Pilih Row ➔
+                            </span>
                           </button>
                         </div>
-                        <input
-                          type="text"
-                          value={state.rfidTag || ''}
-                          onChange={(e) => handleInputChange(item.id, 'rfidTag', e.target.value.toUpperCase())}
-                          placeholder="Contoh: EPC-PGD-2026-XXXXX"
-                          className="w-full p-2 border border-slate-300 rounded-lg font-mono text-xs focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        />
-                      </div>
 
-                      <div className="md:col-span-4">
-                        <label className="block font-semibold text-slate-700 mb-1">Baki / Laci Brankas Cabang</label>
-                        <select
-                          value={state.drawerCode || ''}
-                          onChange={(e) => handleInputChange(item.id, 'drawerCode', e.target.value)}
-                          className="w-full p-2 border border-slate-300 rounded-lg text-xs bg-white focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                        >
-                          {drawers.map((d) => (
-                            <option key={d.id} value={d.code}>
-                              {d.name} ({d.rfidAntenna})
-                            </option>
-                          ))}
-                        </select>
+                        <div className="md:col-span-3">
+                          <button
+                            type="button"
+                            disabled={state.submitting || !state.rfidTag}
+                            onClick={() => handlePairItem(item.id)}
+                            className="w-full py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+                          >
+                            {state.submitting ? <Loader2 size={13} className="animate-spin" /> : <Radio size={13} />}
+                            <span>Pairing & Simpan</span>
+                          </button>
+                        </div>
                       </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
 
-                      <div className="md:col-span-3">
-                        <button
-                          type="button"
-                          disabled={state.submitting || !state.rfidTag}
-                          onClick={() => handlePairItem(item.id)}
-                          className="w-full py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-semibold text-xs flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-50 transition-colors"
+          {/* Footer */}
+          <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50 rounded-b-2xl">
+            <div className="text-xs text-slate-500">
+              Keping emas yang telah dipasangkan RFID akan otomatis terpantau sinyal sensornya di Dashboard Outlet.
+            </div>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* POPUP MODAL: Hierarchical Vault Location Picker (Lemari -> Laci -> Row) */}
+      {vaultPicker.isOpen && (
+        <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full my-6 flex flex-col max-h-[88vh] border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/80 rounded-t-2xl">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-100 text-emerald-800 rounded-xl">
+                  <Layers size={18} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">
+                    Pilih Lokasi Simpan Brankas Cabang
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Alokasikan keping emas ke lemari, laci modular, dan baris (Row) penyimpanan
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                className="text-slate-400 hover:text-slate-600 font-bold text-xl p-1"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Breadcrumb Steps */}
+            <div className="px-5 py-2.5 bg-slate-100/70 border-b border-slate-200/80 flex items-center gap-2 text-xs overflow-x-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  if (vaultPicker.cabinetsList.length > 1) {
+                    setVaultPicker((prev) => ({ ...prev, step: 'CABINETS', selectedDrawer: null }));
+                  }
+                }}
+                className={`font-semibold transition flex items-center gap-1 ${vaultPicker.step === 'CABINETS'
+                    ? 'text-emerald-700 font-bold'
+                    : vaultPicker.cabinetsList.length > 1
+                      ? 'text-slate-600 hover:text-slate-900'
+                      : 'text-slate-500 cursor-default'
+                  }`}
+              >
+                <span>1. Lemari ({vaultPicker.selectedCabinet ? vaultPicker.selectedCabinet.code : 'Pilih'})</span>
+              </button>
+
+              <ChevronRight size={13} className="text-slate-400 shrink-0" />
+
+              <button
+                type="button"
+                disabled={!vaultPicker.selectedCabinet}
+                onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'DRAWERS' }))}
+                className={`font-semibold transition flex items-center gap-1 ${vaultPicker.step === 'DRAWERS'
+                    ? 'text-emerald-700 font-bold'
+                    : vaultPicker.selectedCabinet
+                      ? 'text-slate-600 hover:text-slate-900'
+                      : 'text-slate-400 cursor-not-allowed'
+                  }`}
+              >
+                <span>2. Laci ({vaultPicker.selectedDrawer ? vaultPicker.selectedDrawer.name : 'Pilih'})</span>
+              </button>
+
+              <ChevronRight size={13} className="text-slate-400 shrink-0" />
+
+              <span
+                className={`font-semibold flex items-center gap-1 ${vaultPicker.step === 'ROWS' ? 'text-emerald-700 font-bold' : 'text-slate-400'
+                  }`}
+              >
+                <span>3. Baris (Row 1 s/d {vaultPicker.selectedDrawer?.rows || 6})</span>
+              </span>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-5 flex-1 overflow-y-auto space-y-4">
+              {/* STEP 1: Pilih Lemari (Bila > 1 Lemari) */}
+              {vaultPicker.step === 'CABINETS' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="relative flex-1">
+                      <Search size={14} className="text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        placeholder="Cari kode atau nama lemari brankas..."
+                        value={vaultPicker.cabinetSearch}
+                        onChange={(e) =>
+                          setVaultPicker((prev) => ({ ...prev, cabinetSearch: e.target.value }))
+                        }
+                        className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      />
+                    </div>
+                    <span className="text-[11px] text-slate-500 font-medium shrink-0">
+                      {vaultPicker.cabinetsList.length} Lemari Tersedia
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {vaultPicker.cabinetsList
+                      .filter((c) =>
+                        vaultPicker.cabinetSearch
+                          ? c.code.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase()) ||
+                          c.name.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase())
+                          : true
+                      )
+                      .map((cab) => (
+                        <div
+                          key={cab.id}
+                          onClick={() => handleSelectCabinet(cab)}
+                          className="p-3.5 border border-slate-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/40 rounded-xl transition cursor-pointer space-y-2 group"
                         >
-                          {state.submitting ? <Loader2 size={13} className="animate-spin" /> : <Radio size={13} />}
-                          <span>Pairing & Simpan</span>
-                        </button>
-                      </div>
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono font-bold text-xs text-slate-900 group-hover:text-emerald-800">
+                              {cab.code}
+                            </span>
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold">
+                              {cab.drawerCount || 10} Laci
+                            </span>
+                          </div>
+                          <div className="font-semibold text-xs text-slate-800 line-clamp-1">
+                            {cab.name}
+                          </div>
+                          <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1 border-t border-slate-100">
+                            <span>Kapasitas: {cab.usedCapacity || 0} / {cab.totalCapacity || 3300} slot</span>
+                            <span className="text-emerald-700 font-bold group-hover:translate-x-0.5 transition-transform">
+                              Pilih ➔
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: Pilih Baki / Laci RFID */}
+              {vaultPicker.step === 'DRAWERS' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-xs">
+                        Pilih Baki / Laci di Lemari {vaultPicker.selectedCabinet?.code}
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        {vaultPicker.selectedCabinet?.name} • Silakan pilih salah satu laci modular
+                      </p>
+                    </div>
+                    {vaultPicker.cabinetsList.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'CABINETS' }))}
+                        className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold"
+                      >
+                        ← Ganti Lemari
+                      </button>
+                    )}
+                  </div>
+
+                  {vaultPicker.loadingDetail ? (
+                    <div className="flex flex-col items-center justify-center py-12 text-slate-400">
+                      <Loader2 size={24} className="animate-spin text-emerald-700 mb-2" />
+                      <span className="text-xs">Memuat daftar laci...</span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {(vaultPicker.cabinetDetail?.drawers || drawers || []).map((drw) => {
+                        const rows = drw.rows || 6;
+                        const cols = drw.cols || 55;
+                        const capacity = drw.capacity || rows * cols;
+                        const used = drw.usedCapacity || drw.items?.length || 0;
+                        const percent = capacity > 0 ? Math.round((used / capacity) * 100) : 0;
+
+                        return (
+                          <div
+                            key={drw.id || drw.code}
+                            onClick={() => handleSelectDrawer(drw)}
+                            className="p-3 border border-slate-200 hover:border-emerald-500 bg-white hover:bg-emerald-50/40 rounded-xl transition cursor-pointer space-y-1.5 group"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-xs text-slate-800 group-hover:text-emerald-800">
+                                {drw.name}
+                              </span>
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-mono font-semibold">
+                                {drw.rfidAntenna || 'Antena RFID'}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              Struktur: <strong>{rows} Baris</strong> x <strong>{cols} Kolom</strong> ({capacity} slot)
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-100">
+                              <span>Terisi: {used} / {capacity} keping ({percent}%)</span>
+                              <span className="text-emerald-700 font-bold group-hover:translate-x-0.5 transition-transform">
+                                Pilih Row ➔
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
-              );
-            })
-          )}
-        </div>
+              )}
 
-        {/* Footer */}
-        <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50 rounded-b-2xl">
-          <div className="text-xs text-slate-500">
-            Keping emas yang telah dipasangkan RFID akan otomatis terpantau sinyal sensornya di Dashboard Outlet.
+              {/* STEP 3: Pilih Baris (Row 1 s/d 6) */}
+              {vaultPicker.step === 'ROWS' && vaultPicker.selectedDrawer && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="font-bold text-slate-800 text-xs">
+                        Pilih Baris (Row) di {vaultPicker.selectedDrawer.name}
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        {vaultPicker.selectedCabinet?.code} • {vaultPicker.selectedDrawer.code} • Silakan pilih baris rak baki
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'DRAWERS' }))}
+                      className="text-[11px] text-emerald-700 hover:text-emerald-800 font-semibold"
+                    >
+                      ← Ganti Laci
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {Array.from({ length: vaultPicker.selectedDrawer.rows || 6 }, (_, idx) => {
+                      const rowNum = idx + 1;
+                      const cols = vaultPicker.selectedDrawer.cols || 55;
+                      const drawerItems = vaultPicker.selectedDrawer.items || [];
+                      const itemsInRow = drawerItems.filter(
+                        (it) => it.slotPosition && it.slotPosition.toUpperCase().startsWith(`R${rowNum}-`)
+                      ).length;
+                      const availableInRow = Math.max(0, cols - itemsInRow);
+                      const nextSlotPos = `R${rowNum}-${String(itemsInRow + 1).padStart(2, '0')}`;
+                      const isFull = availableInRow === 0;
+
+                      return (
+                        <div
+                          key={rowNum}
+                          onClick={() => {
+                            if (!isFull) handleSelectRow(rowNum, nextSlotPos);
+                          }}
+                          className={`p-3.5 border rounded-xl transition flex items-center justify-between gap-3 ${isFull
+                              ? 'bg-slate-50 border-slate-200 opacity-60 cursor-not-allowed'
+                              : 'bg-white border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/40 cursor-pointer shadow-2xs group'
+                            }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className="w-16 text-center py-1 bg-slate-100 group-hover:bg-emerald-100 group-hover:text-emerald-800 rounded-lg font-mono font-bold text-xs text-slate-700 border border-slate-200">
+                              Row {rowNum}
+                            </div>
+                            <div>
+                              <div className="font-semibold text-xs text-slate-800">
+                                Baris ke-{rowNum} ({cols} Slot Kolom)
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                                <span>Terisi: <strong className="text-slate-700">{itemsInRow}</strong> keping</span>
+                                <span>•</span>
+                                <span>Tersedia: <strong className="text-emerald-700">{availableInRow}</strong> slot</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Slot: {nextSlotPos}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={isFull}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition ${isFull
+                                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                  : 'bg-emerald-700 text-white group-hover:bg-emerald-800 shadow-2xs'
+                                }`}
+                            >
+                              <span>Pilih Row {rowNum}</span>
+                              <ChevronRight size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-3.5 border-t border-slate-200/80 bg-slate-50 rounded-b-2xl flex items-center justify-between text-xs">
+              <span className="text-slate-500 text-[11px]">
+                Format penyimpanan: Lemari ➔ Laci Baki ➔ Row (R1 s/d R6)
+              </span>
+              <button
+                type="button"
+                onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                className="px-3 py-1.5 border border-slate-200 rounded-lg text-slate-600 hover:bg-slate-100 font-semibold"
+              >
+                Batal
+              </button>
+            </div>
           </div>
-          <button
-            onClick={onClose}
-            className="px-4 py-2 border border-slate-200 text-slate-700 rounded-xl text-xs font-semibold hover:bg-slate-100"
-          >
-            Tutup
-          </button>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 }
 
@@ -637,10 +1127,10 @@ function PoDetailModal({ po, userRole, onClose, onRefresh, onOpenRfidPairing }) 
                       <td className="px-4 py-2.5 text-center text-slate-700 font-bold">{line.qtyRequested}</td>
                       <td className="px-4 py-2.5 text-center">
                         <span className={`px-2 py-0.5 rounded text-[11px] font-mono font-medium ${line.availableStock >= line.qtyRequested
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : line.availableStock > 0
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-red-100 text-red-800'
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : line.availableStock > 0
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-red-100 text-red-800'
                           }`}>
                           {line.availableStock ?? '-'}
                         </span>
@@ -888,8 +1378,8 @@ export default function OutletOrdersPage() {
                 key={s || 'all'}
                 onClick={() => setFilterStatus(s)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${filterStatus === s
-                    ? 'bg-emerald-700 text-white font-semibold shadow-sm'
-                    : 'text-slate-600 hover:bg-slate-100'
+                  ? 'bg-emerald-700 text-white font-semibold shadow-sm'
+                  : 'text-slate-600 hover:bg-slate-100'
                   }`}
               >
                 {s ? (cfg?.label || s) : 'Semua Status'}

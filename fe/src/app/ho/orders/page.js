@@ -533,15 +533,33 @@ function ScanItemModal({ po, onClose, onItemAdded }) {
 
       stopCamera();
 
-      Swal.fire({
-        title: 'Berhasil Dipicking!',
-        text: `${res.data.item.brand} ${res.data.item.weight}g dari ${res.data.location} berhasil dialokasikan ke PO`,
-        icon: 'success',
-        confirmButtonColor: '#059669',
-        confirmButtonText: 'Lanjut Scan Item Berikutnya',
-        showCancelButton: true,
-        cancelButtonText: 'Selesai Picking',
-      }).then((result) => {
+      // Hitung sisa item yang belum dipicking (selain item yang baru saja di-pick)
+      const remainingUnpicked = (po.items || []).filter(
+        (pi) => !pi.isPicked && (pi.item?.id || pi.itemId) !== targetItem?.id
+      );
+      const isAllCompleted = remainingUnpicked.length === 0;
+
+      if (isAllCompleted) {
+        await Swal.fire({
+          title: '🎉 Seluruh Item Selesai Dipicking!',
+          text: `Item ${res.data.item.brand} ${res.data.item.weight}g berhasil dipicking. Semua keping emas pada PO ini telah selesai dipicking dan PO siap untuk di-dispatch.`,
+          icon: 'success',
+          confirmButtonColor: '#059669',
+          confirmButtonText: 'Selesai Picking',
+          showCancelButton: false,
+        });
+        onItemAdded(res.data);
+        onClose();
+      } else {
+        const result = await Swal.fire({
+          title: 'Berhasil Dipicking!',
+          text: `${res.data.item.brand} ${res.data.item.weight}g dari ${res.data.location} berhasil dipicking. Masih tersisa ${remainingUnpicked.length} item lagi yang perlu dipicking.`,
+          icon: 'success',
+          confirmButtonColor: '#059669',
+          confirmButtonText: 'Lanjut Scan Item Berikutnya',
+          showCancelButton: true,
+          cancelButtonText: 'Tutup Sementara',
+        });
         onItemAdded(res.data);
         if (result.isConfirmed) {
           setStep('cabinet');
@@ -558,7 +576,7 @@ function ScanItemModal({ po, onClose, onItemAdded }) {
         } else {
           onClose();
         }
-      });
+      }
     } catch (err) {
       toast.error(err.message || 'Gagal menyimpan picking item');
     }
@@ -1502,6 +1520,12 @@ function HoPoDetailModal({ po: initialPo, userRole, onClose, onRefresh }) {
   const isSupervisor = ['HO_SUPERVISOR', 'SUPER_ADMIN'].includes(userRole);
   const isStaff = ['HO_STAFF', 'HO_LOGISTICS', 'HO_SUPERVISOR', 'SUPER_ADMIN'].includes(userRole);
 
+  const allItemsPicked = Boolean(
+    po.items &&
+    po.items.length > 0 &&
+    po.items.every((pi) => pi.isPicked)
+  );
+
   return (
     <>
       <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -1840,16 +1864,35 @@ function HoPoDetailModal({ po: initialPo, userRole, onClose, onRefresh }) {
                 <Package size={14} /> Mulai Picking
               </button>
             )}
-            {/* Scan item */}
+            {/* Scan item & Dispatch */}
             {po.status === 'PICKING' && isStaff && (
               <>
-                <button onClick={() => setShowScan(true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700">
-                  <QrCode size={14} /> Scan Item
-                </button>
-                <button onClick={() => setShowDispatch(true)}
-                  disabled={!po.items || po.items.length === 0}
-                  className="flex items-center gap-2 px-4 py-2 bg-cyan-600 text-white rounded-xl text-sm font-medium hover:bg-cyan-700 disabled:opacity-60">
+                {!allItemsPicked ? (
+                  <button
+                    onClick={() => setShowScan(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 shadow-xs"
+                  >
+                    <QrCode size={14} /> Scan Item
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold">
+                    <CheckCircle2 size={14} className="text-emerald-600" /> Seluruh Item Selesai Dipicking
+                  </span>
+                )}
+                <button
+                  onClick={() => setShowDispatch(true)}
+                  disabled={!allItemsPicked || loading}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors shadow-xs ${
+                    allItemsPicked && !loading
+                      ? 'bg-cyan-600 text-white hover:bg-cyan-700 cursor-pointer'
+                      : 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-60'
+                  }`}
+                  title={
+                    !allItemsPicked
+                      ? `Tombol Dispatch nonaktif: baru ${(po.items || []).filter((i) => i.isPicked).length} dari ${(po.items || []).length} item yang selesai dipicking`
+                      : 'Dispatch PO ke Kurir'
+                  }
+                >
                   <Truck size={14} /> Dispatch
                 </button>
               </>

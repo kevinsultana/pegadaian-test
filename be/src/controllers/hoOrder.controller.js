@@ -39,6 +39,34 @@ const listHoOrders = async (req, res) => {
   }
 };
 
+// Helper: Normalisasi string brand untuk pencocokan fleksibel (mengabaikan spasi, underscore, strip, dan case)
+const normalizeBrandStr = (str) => {
+  if (!str) return '';
+  return String(str).toUpperCase().replace(/[\s_\-]+/g, '');
+};
+
+const isBrandMatch = (b1, b2) => {
+  if (!b1 || !b2) return false;
+  const s1 = normalizeBrandStr(b1);
+  const s2 = normalizeBrandStr(b2);
+  return s1 === s2 || s1.includes(s2) || s2.includes(s1);
+};
+
+// Helper untuk membangun kondisi Prisma OR query untuk brand
+const buildBrandWhereConditions = (goldBrand) => {
+  if (!goldBrand) return [];
+  const raw = String(goldBrand).trim();
+  const withUnderscore = raw.replace(/\s+/g, '_');
+  const withSpace = raw.replace(/_/g, ' ');
+  const noSpace = raw.replace(/[\s_\-]+/g, '');
+
+  const variants = Array.from(new Set([raw, withUnderscore, withSpace, noSpace])).filter(Boolean);
+  return variants.flatMap((b) => [
+    { brand: { equals: b, mode: 'insensitive' } },
+    { brand: { contains: b, mode: 'insensitive' } },
+  ]);
+};
+
 // Helper: Analisis ketersediaan stok fisik di HO untuk requestLines
 async function analyzeStockForLines(requestLines) {
   const linesWithStock = await Promise.all(
@@ -48,10 +76,7 @@ async function analyzeStockForLines(requestLines) {
           currentStatus: 'IN_HO',
           weight: Number(line.weightGrams),
           drawerId: { not: null },
-          OR: [
-            { brand: { equals: line.goldBrand, mode: 'insensitive' } },
-            { brand: { contains: line.goldBrand, mode: 'insensitive' } },
-          ],
+          OR: buildBrandWhereConditions(line.goldBrand),
         },
         select: { id: true, brand: true, weight: true },
       });
@@ -204,10 +229,7 @@ const getAvailableItemsForPo = async (req, res) => {
             currentStatus: 'IN_HO',
             weight: Number(line.weightGrams),
             drawerId: { not: null },
-            OR: [
-              { brand: { equals: line.goldBrand, mode: 'insensitive' } },
-              { brand: { contains: line.goldBrand, mode: 'insensitive' } },
-            ],
+            OR: buildBrandWhereConditions(line.goldBrand),
           },
           include: {
             drawer: {
@@ -349,10 +371,7 @@ const approveByHoSpv = async (req, res) => {
               currentStatus: 'IN_HO',
               weight: Number(line.weightGrams),
               drawerId: { not: null },
-              OR: [
-                { brand: { equals: line.goldBrand, mode: 'insensitive' } },
-                { brand: { contains: line.goldBrand, mode: 'insensitive' } },
-              ],
+              OR: buildBrandWhereConditions(line.goldBrand),
             },
             orderBy: { createdAt: 'asc' }, // FIFO: Barang tertua diambil pertama
             take: approvedQty,
@@ -368,10 +387,7 @@ const approveByHoSpv = async (req, res) => {
     for (const line of linesWithStock) {
       // Hitung berapa item yang terpilih untuk line ini
       const itemsForThisLine = allocatedItems.filter((item) => {
-        const brandMatch =
-          line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
-          item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
-          line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+        const brandMatch = isBrandMatch(line.goldBrand, item.brand);
         return brandMatch && Number(line.weightGrams) === Number(item.weight);
       });
 
@@ -758,10 +774,7 @@ const scanItem = async (req, res) => {
 
     // 7. Validasi apakah item sesuai dengan salah satu request line
     const matchedLine = po.requestLines.find((line) => {
-      const brandMatch =
-        line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
-        item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
-        line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+      const brandMatch = isBrandMatch(line.goldBrand, item.brand);
       return brandMatch && Number(line.weightGrams) === Number(item.weight);
     });
     if (!matchedLine) {
@@ -839,10 +852,7 @@ const removePickedItem = async (req, res) => {
 
     // Find matched line
     const matchedLine = po.requestLines.find((line) => {
-      const brandMatch =
-        line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
-        item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
-        line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+      const brandMatch = isBrandMatch(line.goldBrand, item.brand);
       return brandMatch && Number(line.weightGrams) === Number(item.weight);
     });
 
@@ -888,8 +898,17 @@ const dispatchOrder = async (req, res) => {
     if (po.status !== 'PICKING') {
       return sendError(res, 'PO harus dalam status PICKING untuk dispatch', 400);
     }
-    if (po.items.length === 0) {
-      return sendError(res, 'Belum ada item yang dipicking', 400);
+    if (!po.items || po.items.length === 0) {
+      return sendError(res, 'Belum ada item yang dipicking atau dialokasikan pada PO ini', 400);
+    }
+
+    const unpickedItems = po.items.filter((item) => !item.isPicked);
+    if (unpickedItems.length > 0) {
+      return sendError(
+        res,
+        `Tidak dapat melakukan dispatch: masih ada ${unpickedItems.length} dari ${po.items.length} item yang belum selesai dipicking`,
+        400
+      );
     }
 
     // Cek apakah ada unfulfilled lines
@@ -1303,10 +1322,7 @@ const verifyPickingStep = async (req, res) => {
       }
 
       const matchedLine = po.requestLines.find((line) => {
-        const brandMatch =
-          line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
-          item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
-          line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+        const brandMatch = isBrandMatch(line.goldBrand, item.brand);
         return brandMatch && Number(line.weightGrams) === Number(item.weight);
       });
       if (!matchedLine) {

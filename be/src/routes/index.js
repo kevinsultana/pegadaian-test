@@ -12,6 +12,7 @@ const outletInventoryRoutes = require('./outletInventory.routes');
 const outletOutboundRoutes = require('./outletOutbound.routes');
 const auditRoutes = require('./audit.routes');
 const masterRoutes = require('./master.routes');
+const traceabilityRoutes = require('./traceability.routes');
 
 const router = express.Router();
 
@@ -47,5 +48,8 @@ router.use('/outlet/outbound', outletOutboundRoutes);
 
 // Audit Trail & Logs
 router.use('/audit', auditRoutes);
+
+// Traceability & Gold Lifecycle History
+router.use('/traceability', traceabilityRoutes);
 
 module.exports = router;

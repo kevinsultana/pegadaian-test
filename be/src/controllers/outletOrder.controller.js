@@ -1,6 +1,21 @@
 const prisma = require('../config/prisma');
 const { sendSuccess, sendError } = require('../utils/response');
 
+// Helper untuk membangun kondisi Prisma OR query untuk brand (fleksibel terhadap spasi, underscore, casing)
+const buildBrandWhereConditions = (goldBrand) => {
+  if (!goldBrand) return [];
+  const raw = String(goldBrand).trim();
+  const withUnderscore = raw.replace(/\s+/g, '_');
+  const withSpace = raw.replace(/_/g, ' ');
+  const noSpace = raw.replace(/[\s_\-]+/g, '');
+
+  const variants = Array.from(new Set([raw, withUnderscore, withSpace, noSpace])).filter(Boolean);
+  return variants.flatMap((b) => [
+    { brand: { equals: b, mode: 'insensitive' } },
+    { brand: { contains: b, mode: 'insensitive' } },
+  ]);
+};
+
 // Helper: generate PO ID
 async function generatePoId() {
   const now = new Date();
@@ -104,10 +119,7 @@ const getOutletOrderDetail = async (req, res) => {
             currentStatus: 'IN_HO',
             weight: Number(line.weightGrams),
             drawerId: { not: null },
-            OR: [
-              { brand: { equals: line.goldBrand, mode: 'insensitive' } },
-              { brand: { contains: line.goldBrand, mode: 'insensitive' } },
-            ],
+            OR: buildBrandWhereConditions(line.goldBrand),
           },
         });
         const shortage = Math.max(0, line.qtyRequested - availableCount);
@@ -336,7 +348,21 @@ const receiveOrder = async (req, res) => {
     const where = user.role === 'SUPER_ADMIN' ? { id } : { id, destLocId: user.locationId };
     const po = await prisma.purchaseOrder.findFirst({
       where,
-      include: { items: true },
+      include: {
+        items: {
+          include: {
+            item: {
+              include: {
+                drawer: {
+                  include: {
+                    slot: { include: { cabinet: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!po) return sendError(res, 'PO tidak ditemukan', 404);
@@ -344,18 +370,32 @@ const receiveOrder = async (req, res) => {
       return sendError(res, `PO tidak bisa diterima karena status saat ini: ${po.status}`, 400);
     }
 
-    // Update semua item PO menjadi IN_OUTLET
+    // Default drawer di outlet tujuan jika ada item yang masih mengarah ke lemari HO
+    const defaultOutletDrawer = await prisma.drawer.findFirst({
+      where: {
+        slot: { cabinet: { locationId: po.destLocId } },
+      },
+    });
+
+    // Update semua item PO menjadi IN_OUTLET dan pastikan drawer dialihkan ke outlet tujuan jika masih memegang laci HO
+    const itemUpdates = po.items.map((poi) => {
+      const isStillInHo = poi.item?.drawer?.slot?.cabinet?.locationId !== po.destLocId;
+      const updateData = { currentStatus: 'IN_OUTLET' };
+      if (isStillInHo && defaultOutletDrawer) {
+        updateData.drawerId = defaultOutletDrawer.id;
+      }
+      return prisma.item.update({
+        where: { id: poi.itemId },
+        data: updateData,
+      });
+    });
+
     await prisma.$transaction([
       prisma.purchaseOrder.update({
         where: { id },
         data: { status: 'RECEIVED', receivedBy: user.username },
       }),
-      ...po.items.map((poi) =>
-        prisma.item.update({
-          where: { id: poi.itemId },
-          data: { currentStatus: 'IN_OUTLET' },
-        })
-      ),
+      ...itemUpdates,
     ]);
 
     return sendSuccess(res, { id }, 'PO berhasil ditandai sebagai diterima');
@@ -499,7 +539,7 @@ const pairItemRfid = async (req, res) => {
   try {
     const { id } = req.params;
     const user = req.user;
-    const { itemId, rfidTag, drawerCode, drawerId } = req.body;
+    const { itemId, rfidTag, drawerCode, drawerId, slotPosition, rowNumber } = req.body;
 
     if (!itemId) {
       return sendError(res, 'ID / Serial Number keping emas wajib diisi', 400);
@@ -540,19 +580,20 @@ const pairItemRfid = async (req, res) => {
       return sendError(res, `Tag RFID ${cleanRfid} sudah digunakan oleh keping ${existingRfid.id}! Gunakan tag RFID unik lain.`, 400);
     }
 
-    // Find target drawer in outlet
+    // Find target drawer in outlet (wajib berada di lokasi outlet tujuan po.destLocId)
     const drawerTarget = drawerCode || drawerId;
     let targetDrawer = null;
     if (drawerTarget) {
       targetDrawer = await prisma.drawer.findFirst({
         where: {
           OR: [{ code: drawerTarget }, { id: drawerTarget }],
+          slot: { cabinet: { locationId: po.destLocId } },
         },
         include: { slot: { include: { cabinet: true } } },
       });
     }
 
-    // If no drawer specified, find default drawer in destination location
+    // If no drawer specified or not in outlet, find default drawer in destination location
     if (!targetDrawer) {
       targetDrawer = await prisma.drawer.findFirst({
         where: {
@@ -568,6 +609,22 @@ const pairItemRfid = async (req, res) => {
 
     // Perform transaction
     const result = await prisma.$transaction(async (tx) => {
+      // Tentukan posisi slot di dalam laci outlet (prioritas slotPosition eksplisit e.g. R1-03 atau per rowNumber)
+      let finalSlotPos = slotPosition;
+      if (!finalSlotPos) {
+        const targetRow = Number(rowNumber) || 1;
+        const itemsInThisRow = await tx.item.count({
+          where: {
+            drawerId: targetDrawer.id,
+            currentStatus: 'IN_OUTLET',
+            slotPosition: { startsWith: `R${targetRow}-` },
+            id: { not: itemId },
+          },
+        });
+        const nextCol = itemsInThisRow + 1;
+        finalSlotPos = `R${targetRow}-${String(nextCol).padStart(2, '0')}`;
+      }
+
       // 1. Update Item
       const updatedItem = await tx.item.update({
         where: { id: itemId },
@@ -575,6 +632,7 @@ const pairItemRfid = async (req, res) => {
           rfidTag: cleanRfid,
           currentStatus: 'IN_OUTLET',
           drawerId: targetDrawer.id,
+          slotPosition: finalSlotPos,
         },
         include: {
           drawer: true,
@@ -588,7 +646,7 @@ const pairItemRfid = async (req, res) => {
           event: 'OUTLET_RFID_PAIRING',
           actor: user.username,
           locationCode: po.destLocation?.code || 'OUTLET',
-          details: `Keping emas ${itemId} (${updatedItem.brand} ${updatedItem.weight}g) dipairing dengan RFID Tag: ${cleanRfid} dan disimpan di ${targetDrawer.name} (Antena: ${targetDrawer.rfidAntenna || 'Default'}).`,
+          details: `Keping emas ${itemId} (${updatedItem.brand} ${updatedItem.weight}g) dipairing dengan RFID Tag: ${cleanRfid} dan disimpan di ${targetDrawer.name} (${finalSlotPos}) (Antena: ${targetDrawer.rfidAntenna || 'Default'}).`,
         },
       });
 

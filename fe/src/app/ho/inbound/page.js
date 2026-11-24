@@ -27,6 +27,9 @@ import {
   Calendar,
   UserCheck,
   ShieldAlert,
+  ChevronRight,
+  ChevronLeft,
+  ArrowLeft,
 } from 'lucide-react';
 
 export default function HOInboundPage() {
@@ -68,10 +71,23 @@ export default function HOInboundPage() {
   const [putAwayForm, setPutAwayForm] = useState({
     serialNumber: '',
     drawerCode: '',
-    slotPosition: 1,
     notes: '',
   });
+  const [selectedDrawerInfo, setSelectedDrawerInfo] = useState(null);
   const [puttingAway, setPuttingAway] = useState(false);
+
+  // Vault Location Picker Modal (Lemari -> Slot -> Laci)
+  const [vaultPicker, setVaultPicker] = useState({
+    isOpen: false,
+    step: 'CABINETS', // 'CABINETS' | 'SLOTS' | 'DRAWERS'
+    cabinetsList: [],
+    loadingCabinets: false,
+    cabinetSearch: '',
+    selectedCabinet: null,
+    cabinetDetail: null,
+    loadingDetail: false,
+    selectedSlot: null,
+  });
 
   // Stored Item QR Label Modal
   const [qrLabelModal, setQrLabelModal] = useState({ isOpen: false, item: null });
@@ -249,17 +265,33 @@ export default function HOInboundPage() {
   };
 
   // Prepare next keping form & fetch intelligent drawer recommendations
-  const prepareNextKeping = async (line) => {
+  const prepareNextKeping = async (line, preferDrawerCode) => {
     if (!line) return;
     const year = new Date().getFullYear();
     const randomSerial = `LM-${year}-${Math.floor(100000 + Math.random() * 900000)}`;
+    const kepingNum = (line.qtyReceived || 0) + 1;
 
     setPutAwayForm((prev) => ({
       ...prev,
       serialNumber: randomSerial,
-      slotPosition: (line.qtyReceived || 0) + 1,
-      notes: `Put-away keping ke-${(line.qtyReceived || 0) + 1} (${line.goldBrand} ${line.weightGrams}g)`,
+      notes: `Put-away keping ke-${kepingNum} (${line.goldBrand} ${line.weightGrams}g)`,
     }));
+
+    // If a drawer was already chosen previously (auto next adjacent placement):
+    if (preferDrawerCode && selectedDrawerInfo) {
+      if ((selectedDrawerInfo.availableCapacity || 10) > 1) {
+        setPutAwayForm((prev) => ({
+          ...prev,
+          drawerCode: preferDrawerCode,
+        }));
+        setSelectedDrawerInfo((prev) => ({
+          ...prev,
+          availableCapacity: Math.max(0, (prev.availableCapacity || 1) - 1),
+          usedCapacity: (prev.usedCapacity || 0) + 1,
+        }));
+        return; // Auto next keping retained in the same adjacent drawer!
+      }
+    }
 
     // Fetch drawer recommendations
     try {
@@ -271,11 +303,22 @@ export default function HOInboundPage() {
         setRecommendations(recRes.data.recommendations || []);
         const best = recRes.data.bestMatch;
         setBestRecommendation(best);
-        if (best) {
+        if (best && !preferDrawerCode) {
           setPutAwayForm((prev) => ({
             ...prev,
             drawerCode: best.drawerCode,
           }));
+          setSelectedDrawerInfo({
+            drawerId: best.drawerId,
+            drawerCode: best.drawerCode,
+            drawerName: best.drawerName,
+            cabinetCode: best.cabinetCode,
+            cabinetName: best.cabinetName,
+            slotNumber: best.slotNumber,
+            category: best.category,
+            capacity: best.capacity,
+            availableCapacity: best.availableCapacity,
+          });
         }
       }
     } catch (e) {
@@ -283,6 +326,120 @@ export default function HOInboundPage() {
     } finally {
       setLoadingRecs(false);
     }
+  };
+
+  // Open Vault Drawer Location Picker Modal
+  const handleOpenVaultPicker = async () => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      isOpen: true,
+      step: 'CABINETS',
+      cabinetSearch: '',
+      loadingCabinets: prev.cabinetsList.length === 0,
+    }));
+
+    if (vaultPicker.cabinetsList.length === 0) {
+      try {
+        const res = await apiRequest('/ho/cabinets');
+        const list = Array.isArray(res.data) ? res.data : (res.data?.cabinets || []);
+        setVaultPicker((prev) => ({
+          ...prev,
+          cabinetsList: list,
+          loadingCabinets: false,
+        }));
+      } catch (err) {
+        console.error(err);
+        showToast.error('Gagal mengambil daftar lemari vault HO');
+        setVaultPicker((prev) => ({ ...prev, loadingCabinets: false }));
+      }
+    }
+  };
+
+  // Select a cabinet to view its slots
+  const handleSelectCabinet = async (cab) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedCabinet: cab,
+      step: 'SLOTS',
+      loadingDetail: true,
+      selectedSlot: null,
+    }));
+
+    try {
+      const res = await apiRequest(`/ho/cabinets/${cab.code}`);
+      const detail = res.data?.cabinet || res.data;
+      setVaultPicker((prev) => ({
+        ...prev,
+        cabinetDetail: detail,
+        loadingDetail: false,
+      }));
+    } catch (err) {
+      console.error(err);
+      showToast.error(`Gagal mengambil detail slot lemari ${cab.code}`);
+      setVaultPicker((prev) => ({ ...prev, loadingDetail: false }));
+    }
+  };
+
+  // Select a slot to view its drawers
+  const handleSelectSlot = (slot) => {
+    setVaultPicker((prev) => ({
+      ...prev,
+      selectedSlot: slot,
+      step: 'DRAWERS',
+    }));
+  };
+
+  // Select a drawer
+  const handleSelectDrawer = (drw) => {
+    const cab = vaultPicker.selectedCabinet;
+    const slot = vaultPicker.selectedSlot;
+
+    const drawerInfo = {
+      drawerId: drw.id,
+      drawerCode: drw.code,
+      drawerName: drw.name,
+      cabinetCode: cab?.code || '-',
+      cabinetName: cab?.name || '-',
+      slotNumber: slot?.slotNumber || 1,
+      category: drw.category,
+      capacity: drw.capacity,
+      usedCapacity: drw.items?.length || 0,
+      availableCapacity: Math.max(0, drw.capacity - (drw.items?.length || 0)),
+    };
+
+    setPutAwayForm((prev) => ({
+      ...prev,
+      drawerCode: drw.code,
+    }));
+    setSelectedDrawerInfo(drawerInfo);
+
+    setVaultPicker((prev) => ({
+      ...prev,
+      isOpen: false,
+    }));
+
+    showToast.success(`Laci ${drw.name} (${cab?.code} Slot ${slot?.slotNumber}) berhasil dipilih!`);
+  };
+
+  // Use AI recommendation button
+  const handleUseRecommendation = () => {
+    if (!bestRecommendation) return;
+    setPutAwayForm((prev) => ({
+      ...prev,
+      drawerCode: bestRecommendation.drawerCode,
+    }));
+    setSelectedDrawerInfo({
+      drawerId: bestRecommendation.drawerId,
+      drawerCode: bestRecommendation.drawerCode,
+      drawerName: bestRecommendation.drawerName,
+      cabinetCode: bestRecommendation.cabinetCode,
+      cabinetName: bestRecommendation.cabinetName,
+      slotNumber: bestRecommendation.slotNumber,
+      category: bestRecommendation.category,
+      capacity: bestRecommendation.capacity,
+      availableCapacity: bestRecommendation.availableCapacity,
+    });
+    showToast.success(`Laci rekomendasi ${bestRecommendation.drawerName} dipilih!`);
   };
 
   // When selected line changes in Put-away modal
@@ -303,6 +460,8 @@ export default function HOInboundPage() {
     const line = activeOrder.lines.find((l) => l.id === selectedLineId);
     if (!line) return;
 
+    const currentDrawerCode = putAwayForm.drawerCode;
+
     try {
       setPuttingAway(true);
       const res = await apiRequest(`/ho/inbound/${activeOrder.id}/put-away`, {
@@ -313,8 +472,7 @@ export default function HOInboundPage() {
           brand: line.goldBrand,
           weight: line.weightGrams,
           purity: line.purity,
-          drawerCode: putAwayForm.drawerCode,
-          slotPosition: putAwayForm.slotPosition,
+          drawerCode: currentDrawerCode,
           notes: putAwayForm.notes,
         }),
       });
@@ -336,10 +494,10 @@ export default function HOInboundPage() {
         setPutAwayModalOpen(false);
         fetchOrders();
       } else {
-        // Move to next keping
+        // Move to next keping automatically keeping same/adjacent drawer
         const nextLine = updatedOrder.lines.find((l) => l.qtyReceived < l.qtyRequested) || updatedOrder.lines[0];
         setSelectedLineId(nextLine.id);
-        prepareNextKeping(nextLine);
+        prepareNextKeping(nextLine, currentDrawerCode);
         fetchOrders();
       }
 
@@ -499,17 +657,15 @@ export default function HOInboundPage() {
               <button
                 key={tab.key}
                 onClick={() => setStatusFilter(tab.key)}
-                className={`px-3 py-1.5 rounded-xl whitespace-nowrap transition-all flex items-center gap-1.5 ${
-                  statusFilter === tab.key
+                className={`px-3 py-1.5 rounded-xl whitespace-nowrap transition-all flex items-center gap-1.5 ${statusFilter === tab.key
                     ? 'bg-emerald-700 text-white font-semibold shadow-sm'
                     : 'text-slate-600 hover:bg-slate-100'
-                }`}
+                  }`}
               >
                 <span>{tab.label}</span>
                 <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                    statusFilter === tab.key ? 'bg-emerald-800 text-emerald-100' : 'bg-slate-100 text-slate-600'
-                  }`}
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full ${statusFilter === tab.key ? 'bg-emerald-800 text-emerald-100' : 'bg-slate-100 text-slate-600'
+                    }`}
                 >
                   {tab.count}
                 </span>
@@ -517,14 +673,14 @@ export default function HOInboundPage() {
             ))}
           </div>
 
-          <div className="relative min-w-[240px]">
+          <div className="relative min-w-60">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
             <input
               type="text"
               placeholder="Cari PO, supplier, atau staff..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white transition-all"
+              className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all"
             />
           </div>
         </div>
@@ -604,7 +760,7 @@ export default function HOInboundPage() {
                           </div>
                         </td>
 
-                        <td className="py-3.5 px-4 min-w-[160px]">
+                        <td className="py-3.5 px-4 min-w-40">
                           <div className="flex items-center justify-between text-[11px] mb-1">
                             <span className="font-medium text-slate-700">{o.totalReceived} / {o.totalRequested} Keping</span>
                             <span className="font-bold text-emerald-700">{progressPercent}%</span>
@@ -715,7 +871,7 @@ export default function HOInboundPage() {
                       value={createForm.supplierName}
                       onChange={(e) => setCreateForm({ ...createForm, supplierName: e.target.value })}
                       placeholder="Contoh: PT ANTAM (Persero) Tbk, Galeri 24"
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
 
@@ -725,7 +881,7 @@ export default function HOInboundPage() {
                       type="date"
                       value={createForm.expectedDate}
                       onChange={(e) => setCreateForm({ ...createForm, expectedDate: e.target.value })}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
@@ -737,7 +893,7 @@ export default function HOInboundPage() {
                     value={createForm.notes}
                     onChange={(e) => setCreateForm({ ...createForm, notes: e.target.value })}
                     placeholder="Contoh: Batch pengadaan stok q4 / restock kebutuhan cabang"
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -916,13 +1072,12 @@ export default function HOInboundPage() {
                         key={l.id}
                         disabled={isFulfilled}
                         onClick={() => handleSelectLineInPutAway(l.id)}
-                        className={`p-2.5 rounded-xl text-left border transition-all flex items-center justify-between ${
-                          isFulfilled
+                        className={`p-2.5 rounded-xl text-left border transition-all flex items-center justify-between ${isFulfilled
                             ? 'bg-slate-100 border-slate-200 text-slate-400 opacity-60 cursor-not-allowed'
                             : isSelected
-                            ? 'bg-emerald-50 border-emerald-500 text-emerald-950 shadow-sm'
-                            : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800'
-                        }`}
+                              ? 'bg-emerald-50 border-emerald-500 text-emerald-950 shadow-sm'
+                              : 'bg-white border-slate-200 hover:border-slate-300 text-slate-800'
+                          }`}
                       >
                         <div>
                           <div className="font-bold text-xs flex items-center gap-1.5">
@@ -950,7 +1105,7 @@ export default function HOInboundPage() {
               {/* Put-Away Form for Single Keping */}
               <form onSubmit={handlePutAwaySubmit} className="space-y-4 text-xs">
                 {/* System Drawer Recommendation Box */}
-                <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-3.5">
+                <div className="bg-linear-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-3.5">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
                       <Sparkles className="w-4 h-4 text-emerald-700" />
@@ -974,12 +1129,7 @@ export default function HOInboundPage() {
 
                         <button
                           type="button"
-                          onClick={() =>
-                            setPutAwayForm((prev) => ({
-                              ...prev,
-                              drawerCode: bestRecommendation.drawerCode,
-                            }))
-                          }
+                          onClick={handleUseRecommendation}
                           className="px-3 py-1 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-semibold text-[11px] whitespace-nowrap self-start sm:self-auto transition-colors"
                         >
                           Gunakan Rekomendasi
@@ -997,6 +1147,80 @@ export default function HOInboundPage() {
                   )}
                 </div>
 
+                {/* Pemilihan Laci Vault Interaktif (Modal Lemari -> Slot -> Laci) */}
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Layers className="w-4 h-4 text-emerald-700" />
+                      <span>Laci Vault Tujuan Penyimpanan <span className="text-rose-500">*</span></span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenVaultPicker}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition active:scale-95"
+                    >
+                      <Building2 className="w-3.5 h-3.5" />
+                      <span>{selectedDrawerInfo ? 'Ganti Laci / Lemari' : 'Pilih Laci Vault'}</span>
+                    </button>
+                  </div>
+
+                  {selectedDrawerInfo ? (
+                    <div className="bg-white p-3 rounded-xl border border-emerald-300 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-extrabold text-xs text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
+                            {selectedDrawerInfo.cabinetCode}
+                          </span>
+                          <span className="text-slate-300 font-bold">›</span>
+                          <span className="font-bold text-xs text-slate-800 bg-slate-100 px-2 py-0.5 rounded">
+                            Slot {selectedDrawerInfo.slotNumber}
+                          </span>
+                          <span className="text-slate-300 font-bold">›</span>
+                          <span className="font-bold text-xs text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            {selectedDrawerInfo.drawerName}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2">
+                          <span>Kategori: {selectedDrawerInfo.category || 'Umum'}</span>
+                          <span>•</span>
+                          <span className="text-emerald-700 font-semibold">
+                            Kapasitas: {selectedDrawerInfo.usedCapacity || 0}/{selectedDrawerInfo.capacity} keping ({selectedDrawerInfo.availableCapacity || selectedDrawerInfo.capacity} slot sisa)
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-start sm:self-auto">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          Laci Siap Digunakan
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleOpenVaultPicker}
+                          className="text-xs text-emerald-700 hover:text-emerald-900 underline font-semibold"
+                        >
+                          Ubah
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={handleOpenVaultPicker}
+                      className="bg-white p-4 rounded-xl border-2 border-dashed border-slate-300 hover:border-emerald-500 cursor-pointer text-center transition group"
+                    >
+                      <Building2 className="w-6 h-6 mx-auto text-slate-400 group-hover:text-emerald-600 mb-1 transition" />
+                      <p className="text-xs font-bold text-slate-700 group-hover:text-emerald-800">
+                        Klik di sini untuk Memilih Lemari, Slot, dan Laci Vault
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        Pilih secara visual dari daftar seluruh lemari vault HO
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Form Serial Number & Catatan (Posisi Slot Grid Dihapus sesuai permintaan) */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
                   <div>
                     <label className="block text-slate-700 font-semibold mb-1">
@@ -1010,44 +1234,11 @@ export default function HOInboundPage() {
                         setPutAwayForm({ ...putAwayForm, serialNumber: e.target.value.toUpperCase() })
                       }
                       placeholder="Contoh: LM-2026-100201"
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <span className="text-[10px] text-slate-400 mt-1 block">
                       Auto-generate nomor seri unik atau sesuaikan dengan fisik emas.
                     </span>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">
-                      Pilih Laci Vault Tujuan <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      required
-                      value={putAwayForm.drawerCode}
-                      onChange={(e) => setPutAwayForm({ ...putAwayForm, drawerCode: e.target.value })}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                    >
-                      <option value="">-- Pilih Laci Vault --</option>
-                      {recommendations.map((rec) => (
-                        <option key={rec.drawerId} value={rec.drawerCode}>
-                          {rec.cabinetCode} • Slot {rec.slotNumber} • Laci {rec.drawerName} ({rec.availableCapacity} slot sisa)
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Posisi Slot Grid di Laci</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={200}
-                      value={putAwayForm.slotPosition}
-                      onChange={(e) => setPutAwayForm({ ...putAwayForm, slotPosition: e.target.value })}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                    />
                   </div>
 
                   <div>
@@ -1057,8 +1248,11 @@ export default function HOInboundPage() {
                       value={putAwayForm.notes}
                       onChange={(e) => setPutAwayForm({ ...putAwayForm, notes: e.target.value })}
                       placeholder="Catatan penempatan fisik"
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Keterangan keping / put-away.
+                    </span>
                   </div>
                 </div>
 
@@ -1080,6 +1274,343 @@ export default function HOInboundPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL 3: Popup Pemilih Lokasi Vault (Lemari -> Slot -> Laci) */}
+        {vaultPicker.isOpen && (
+          <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-white border border-slate-200 rounded-2xl max-w-4xl w-full p-6 shadow-2xl my-8 space-y-4">
+              {/* Modal Header */}
+              <div className="flex items-center justify-between pb-3.5 border-b border-slate-100">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                    <Building2 className="w-5 h-5 text-emerald-700" />
+                    <span>Pilih Lokasi Penyimpanan Vault HO</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Pilih lemari besi, slot modular, dan laci vault tujuan untuk penempatan fisik emas.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Breadcrumb Steps */}
+              <div className="flex items-center gap-2 text-xs bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setVaultPicker((prev) => ({
+                      ...prev,
+                      step: 'CABINETS',
+                      selectedCabinet: null,
+                      selectedSlot: null,
+                    }))
+                  }
+                  className={`font-bold transition ${vaultPicker.step === 'CABINETS' ? 'text-emerald-700 font-extrabold' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                >
+                  1. Pilih Lemari Besi ({vaultPicker.cabinetsList.length || 32} Unit)
+                </button>
+
+                {vaultPicker.selectedCabinet && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                    <button
+                      type="button"
+                      onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'SLOTS', selectedSlot: null }))}
+                      className={`font-bold transition ${vaultPicker.step === 'SLOTS' ? 'text-emerald-700 font-extrabold' : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                    >
+                      2. {vaultPicker.selectedCabinet.code} ({vaultPicker.selectedCabinet.name})
+                    </button>
+                  </>
+                )}
+
+                {vaultPicker.selectedSlot && (
+                  <>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                    <span className="font-extrabold text-emerald-700">
+                      3. Slot {vaultPicker.selectedSlot.slotNumber} (Pilih Laci)
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {/* STEP 1: PILIH LEMARI */}
+              {vaultPicker.step === 'CABINETS' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="relative flex-1">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Cari kode lemari (misal: CAB-01, CAB-02)..."
+                        value={vaultPicker.cabinetSearch}
+                        onChange={(e) => setVaultPicker((prev) => ({ ...prev, cabinetSearch: e.target.value }))}
+                        className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                      />
+                    </div>
+                    <span className="text-xs text-slate-500 font-semibold whitespace-nowrap">
+                      {vaultPicker.cabinetsList.length} Lemari Tersedia
+                    </span>
+                  </div>
+
+                  {vaultPicker.loadingCabinets ? (
+                    <div className="py-16 text-center text-slate-400">
+                      <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-600 mb-2" />
+                      <span>Memuat daftar lemari vault...</span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[50vh] overflow-y-auto p-1">
+                      {vaultPicker.cabinetsList
+                        .filter((c) =>
+                          vaultPicker.cabinetSearch
+                            ? c.code.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase()) ||
+                            c.name.toLowerCase().includes(vaultPicker.cabinetSearch.toLowerCase())
+                            : true
+                        )
+                        .map((cab) => {
+                          const isFull = cab.totalOccupied >= cab.totalCapacity && cab.totalCapacity > 0;
+                          return (
+                            <button
+                              type="button"
+                              key={cab.id}
+                              onClick={() => handleSelectCabinet(cab)}
+                              className="p-3 bg-white hover:bg-emerald-50/50 border border-slate-200 hover:border-emerald-400 rounded-xl text-left transition group shadow-sm flex flex-col justify-between"
+                            >
+                              <div>
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="font-mono font-extrabold text-xs text-slate-900 group-hover:text-emerald-800">
+                                    {cab.code}
+                                  </span>
+                                  <span
+                                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isFull
+                                        ? 'bg-rose-50 text-rose-700'
+                                        : (cab.totalOccupied || 0) > 0
+                                          ? 'bg-amber-50 text-amber-700'
+                                          : 'bg-emerald-50 text-emerald-700'
+                                      }`}
+                                  >
+                                    {isFull ? 'Penuh' : (cab.totalOccupied || 0) > 0 ? 'Terisi' : 'Kosong'}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-600 line-clamp-1">{cab.name}</div>
+                              </div>
+
+                              <div className="mt-3 pt-2 border-t border-slate-100 text-[10px] text-slate-500 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span>Kapasitas:</span>
+                                  <span className="font-semibold text-slate-800">
+                                    {cab.totalOccupied || 0} / {cab.totalCapacity || 192} keping
+                                  </span>
+                                </div>
+                                <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-emerald-600 rounded-full transition-all"
+                                    style={{
+                                      width: `${Math.min(
+                                        100,
+                                        Math.round(((cab.totalOccupied || 0) / (cab.totalCapacity || 192)) * 100)
+                                      )}%`,
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* STEP 2: PILIH SLOT */}
+              {vaultPicker.step === 'SLOTS' && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setVaultPicker((prev) => ({ ...prev, step: 'CABINETS', selectedSlot: null }))
+                      }
+                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Kembali ke Daftar Lemari</span>
+                    </button>
+                    <span className="text-xs font-bold text-slate-700">
+                      Pilih Slot di {vaultPicker.selectedCabinet?.code} (1 s/d 8)
+                    </span>
+                  </div>
+
+                  {vaultPicker.loadingDetail ? (
+                    <div className="py-16 text-center text-slate-400">
+                      <Loader2 className="w-6 h-6 animate-spin mx-auto text-emerald-600 mb-2" />
+                      <span>Memuat data slot lemari {vaultPicker.selectedCabinet?.code}...</span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-h-[50vh] overflow-y-auto p-1">
+                      {(vaultPicker.cabinetDetail?.slots || []).map((slot) => {
+                        const totalSlotItems = (slot.drawers || []).reduce(
+                          (acc, d) => acc + (d.items?.length || 0),
+                          0
+                        );
+                        const totalSlotCap = (slot.drawers || []).reduce(
+                          (acc, d) => acc + (d.capacity || 0),
+                          0
+                        );
+                        const isSlotFull = totalSlotItems >= totalSlotCap && totalSlotCap > 0;
+                        return (
+                          <button
+                            type="button"
+                            key={slot.id || slot.slotNumber}
+                            onClick={() => handleSelectSlot(slot)}
+                            className="p-3.5 bg-white hover:bg-emerald-50/50 border border-slate-200 hover:border-emerald-400 rounded-xl text-left transition group shadow-sm flex flex-col justify-between"
+                          >
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="font-extrabold text-sm text-slate-900 group-hover:text-emerald-800">
+                                  Slot {slot.slotNumber}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${isSlotFull
+                                      ? 'bg-rose-50 text-rose-700'
+                                      : totalSlotItems > 0
+                                        ? 'bg-amber-50 text-amber-700'
+                                        : 'bg-emerald-50 text-emerald-700'
+                                    }`}
+                                >
+                                  {isSlotFull ? 'Penuh' : totalSlotItems > 0 ? 'Terisi' : 'Kosong'}
+                                </span>
+                              </div>
+                              <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                                {slot.modularType === 'BIG_DRAWER' ? '1 Laci Besar' : 'Cluster 4 Laci Kecil'}
+                              </span>
+                            </div>
+
+                            <div className="mt-3 pt-2 border-t border-slate-100 text-[10px] text-slate-500 space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span>Isi:</span>
+                                <span className="font-semibold text-slate-800">
+                                  {totalSlotItems} / {totalSlotCap} keping
+                                </span>
+                              </div>
+                              <div className="text-[10px] text-emerald-700 font-medium">
+                                Klik untuk melihat {(slot.drawers || []).length} laci ➔
+                              </div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* STEP 3: PILIH LACI */}
+              {vaultPicker.step === 'DRAWERS' && vaultPicker.selectedSlot && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setVaultPicker((prev) => ({ ...prev, step: 'SLOTS' }))}
+                      className="text-xs font-bold text-emerald-700 hover:text-emerald-800 flex items-center gap-1"
+                    >
+                      <ArrowLeft className="w-3.5 h-3.5" />
+                      <span>Kembali ke Daftar Slot</span>
+                    </button>
+                    <span className="text-xs font-bold text-slate-700">
+                      Pilih Laci / Baki di {vaultPicker.selectedCabinet?.code} Slot {vaultPicker.selectedSlot.slotNumber}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[50vh] overflow-y-auto p-1">
+                    {(vaultPicker.selectedSlot.drawers || []).map((drw) => {
+                      const itemCount = drw.items?.length || 0;
+                      const cap = drw.capacity || 24;
+                      const available = Math.max(0, cap - itemCount);
+                      const isDrawerFull = itemCount >= cap;
+                      const isSelected = putAwayForm.drawerCode === drw.code;
+
+                      return (
+                        <div
+                          key={drw.id || drw.code}
+                          className={`p-3.5 rounded-xl border transition flex flex-col justify-between ${isSelected
+                              ? 'bg-emerald-50 border-emerald-500 ring-2 ring-emerald-500/20'
+                              : 'bg-white border-slate-200 hover:border-slate-300'
+                            }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <h4 className="font-bold text-xs text-slate-900">{drw.name}</h4>
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${isDrawerFull
+                                    ? 'bg-rose-50 text-rose-700'
+                                    : 'bg-emerald-50 text-emerald-700'
+                                  }`}
+                              >
+                                {isDrawerFull ? 'Penuh' : `${available} slot sisa`}
+                              </span>
+                            </div>
+                            <div className="text-[11px] font-mono text-slate-400 mb-1">{drw.code}</div>
+                            {drw.category && (
+                              <div className="text-[11px] text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100">
+                                Kategori: <span className="font-semibold text-slate-800">{drw.category}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between">
+                            <span className="text-[11px] text-slate-500">
+                              Kapasitas: <strong className="text-slate-800">{itemCount}/{cap}</strong> keping
+                            </span>
+
+                            <button
+                              type="button"
+                              disabled={isDrawerFull}
+                              onClick={() => handleSelectDrawer(drw)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 ${isDrawerFull
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                  : isSelected
+                                    ? 'bg-emerald-700 text-white'
+                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-95'
+                                }`}
+                            >
+                              {isSelected ? (
+                                <>
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Terpilih</span>
+                                </>
+                              ) : (
+                                <span>Pilih Laci Ini</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Modal Footer */}
+              <div className="flex items-center justify-end pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setVaultPicker((prev) => ({ ...prev, isOpen: false }))}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium text-xs transition-colors"
+                >
+                  Tutup
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1234,7 +1765,7 @@ export default function HOInboundPage() {
                 {orderDetail.items && orderDetail.items.length > 0 && (
                   <div>
                     <h4 className="font-bold text-slate-800 mb-2">Keping Fisik Emas yang Telah Disimpan di Vault:</h4>
-                    <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100">
+                    <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl divide-y">
                       {orderDetail.items.map((it) => (
                         <div key={it.id} className="p-2.5 flex items-center justify-between hover:bg-slate-50">
                           <div>

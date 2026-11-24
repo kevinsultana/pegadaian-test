@@ -497,8 +497,8 @@ const createInternalMutation = async (req, res, next) => {
       );
     }
 
-    // Check capacity of target drawer
-    if (targetDrawer.items.length >= targetDrawer.capacity) {
+    // Check capacity of target drawer (if moving to another drawer)
+    if (targetDrawer.id !== item.drawerId && targetDrawer.items.length >= targetDrawer.capacity) {
       return sendError(
         res,
         `Laci tujuan ${targetDrawer.name} sudah penuh (${targetDrawer.items.length}/${targetDrawer.capacity} keping)! Pilih laci lain.`,
