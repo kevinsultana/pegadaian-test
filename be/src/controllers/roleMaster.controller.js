@@ -132,9 +132,12 @@ const updateRole = async (req, res, next) => {
 
     let updatePerms = currentRole.permissions;
     if (Array.isArray(permissions)) {
-      // If SUPER_ADMIN, enforce all permissions
+      // If SUPER_ADMIN, enforce all permissions (both modern and legacy keys)
       if (currentRole.code === 'SUPER_ADMIN') {
-        updatePerms = ALL_PERMISSIONS.map(p => p.key);
+        updatePerms = [
+          ...ALL_PERMISSIONS.map((p) => p.key),
+          ...ALL_PERMISSIONS.map((p) => p.legacyKey).filter(Boolean),
+        ];
       } else {
         updatePerms = permissions;
       }

@@ -86,6 +86,26 @@ const createUser = async (req, res, next) => {
       return sendError(res, 'Lokasi yang dipilih tidak ditemukan', 404);
     }
 
+    // Role vs Location Type validation
+    const isOutletLoc = location.type === 'OUTLET_HUB';
+    const isOutletRole = String(role).toUpperCase().startsWith('OUTLET_') || String(role).toUpperCase().includes('CABANG');
+
+    if (isOutletLoc && !isOutletRole) {
+      return sendError(
+        res,
+        `Lokasi "${location.name}" merupakan unit Outlet Cabang. Hanya peran khusus Outlet yang diizinkan (OUTLET_SUPERVISOR, OUTLET_STAFF, OUTLET_PETUGAS).`,
+        400
+      );
+    }
+
+    if (!isOutletLoc && isOutletRole) {
+      return sendError(
+        res,
+        `Lokasi "${location.name}" merupakan unit Head Office (HO). Peran Outlet tidak dapat ditugaskan pada unit HO.`,
+        400
+      );
+    }
+
     const salt = await bcrypt.genSalt(10);
     const passwordHash = await bcrypt.hash(password, salt);
 
@@ -141,6 +161,33 @@ const updateUser = async (req, res, next) => {
 
     if (!targetUser) {
       return sendError(res, 'Pengguna tidak ditemukan', 404);
+    }
+
+    const targetLocId = locationId !== undefined ? locationId : targetUser.locationId;
+    const targetRole = role !== undefined ? role : targetUser.role;
+
+    if (locationId !== undefined || role !== undefined) {
+      const loc = await prisma.location.findUnique({ where: { id: targetLocId } });
+      if (loc) {
+        const isOutletLoc = loc.type === 'OUTLET_HUB';
+        const isOutletRole = String(targetRole).toUpperCase().startsWith('OUTLET_') || String(targetRole).toUpperCase().includes('CABANG');
+
+        if (isOutletLoc && !isOutletRole) {
+          return sendError(
+            res,
+            `Lokasi "${loc.name}" merupakan unit Outlet Cabang. Hanya peran khusus Outlet yang diizinkan (OUTLET_SUPERVISOR, OUTLET_STAFF, OUTLET_PETUGAS).`,
+            400
+          );
+        }
+
+        if (!isOutletLoc && isOutletRole) {
+          return sendError(
+            res,
+            `Lokasi "${loc.name}" merupakan unit Head Office (HO). Peran Outlet tidak dapat ditugaskan pada unit HO.`,
+            400
+          );
+        }
+      }
     }
 
     const updateData = {};

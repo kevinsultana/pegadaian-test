@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 import { apiRequest } from '@/lib/api';
@@ -82,7 +82,13 @@ export default function MasterUsersPage() {
       }
 
       if (locList.length > 0 && !formData.locationId) {
-        setFormData((prev) => ({ ...prev, locationId: locList[0].id }));
+        const firstLoc = locList[0];
+        const isFirstOut = firstLoc.type === 'OUTLET_HUB';
+        setFormData((prev) => ({
+          ...prev,
+          locationId: firstLoc.id,
+          role: isFirstOut ? 'OUTLET_STAFF' : 'HO_STAFF',
+        }));
       }
     } catch (err) {
       console.error(err);
@@ -96,16 +102,74 @@ export default function MasterUsersPage() {
     fetchUsersAndLocations();
   }, []);
 
+  // Helper check if a role belongs strictly to Outlet
+  const isOutletRole = (roleCode = '') => {
+    const code = String(roleCode).toUpperCase();
+    return code.startsWith('OUTLET_') || code.includes('CABANG');
+  };
+
+  // Determine current selected location and filter available roles
+  const selectedLocation = useMemo(() => {
+    return locations.find((l) => l.id === formData.locationId) || locations[0] || null;
+  }, [locations, formData.locationId]);
+
+  const isOutletLocation = selectedLocation?.type === 'OUTLET_HUB';
+
+  const filteredRolesForLocation = useMemo(() => {
+    if (!selectedLocation) return availableRoles;
+    if (isOutletLocation) {
+      return availableRoles.filter((r) => isOutletRole(r.value));
+    } else {
+      // HEAD_OFFICE: only HO, Super Admin, and SPI roles
+      return availableRoles.filter((r) => !isOutletRole(r.value));
+    }
+  }, [availableRoles, selectedLocation, isOutletLocation]);
+
+  // Handle location change & automatically auto-switch role if invalid
+  const handleLocationChange = (newLocId) => {
+    const nextLoc = locations.find((l) => l.id === newLocId);
+    const nextIsOutlet = nextLoc?.type === 'OUTLET_HUB';
+
+    const validRoles = availableRoles.filter((r) => {
+      const isOut = isOutletRole(r.value);
+      return nextIsOutlet ? isOut : !isOut;
+    });
+
+    let nextRole = formData.role;
+    const isCurrentRoleValid = validRoles.some((r) => r.value === formData.role);
+
+    if (!isCurrentRoleValid && validRoles.length > 0) {
+      if (nextIsOutlet) {
+        const preferredOutlet = validRoles.find((r) => r.value === 'OUTLET_STAFF') || validRoles[0];
+        nextRole = preferredOutlet.value;
+      } else {
+        const preferredHo = validRoles.find((r) => r.value === 'HO_STAFF') || validRoles[0];
+        nextRole = preferredHo.value;
+      }
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      locationId: newLocId,
+      role: nextRole,
+    }));
+  };
+
   const openCreateModal = () => {
     setIsEditMode(false);
     setSelectedUserId(null);
     setShowPassword(false);
+
+    const initialLoc = locations[0];
+    const initialIsOutlet = initialLoc?.type === 'OUTLET_HUB';
+    const initialRole = initialIsOutlet ? 'OUTLET_STAFF' : 'HO_STAFF';
+
     setFormData({
       username: '',
       password: 'Password123!',
       fullName: '',
-      role: 'HO_STAFF',
-      locationId: locations[0]?.id || '',
+      role: initialRole,
+      locationId: initialLoc?.id || '',
       isActive: true,
     });
     setFormError('');
@@ -167,10 +231,24 @@ export default function MasterUsersPage() {
     e.preventDefault();
     setFormError('');
 
+    const targetLoc = locations.find((l) => l.id === formData.locationId);
+    const isTargetOutlet = targetLoc?.type === 'OUTLET_HUB';
+    const isRoleOutlet = isOutletRole(formData.role);
+
+    if (isTargetOutlet && !isRoleOutlet) {
+      setFormError(`Lokasi "${targetLoc?.name || 'Cabang'}" merupakan unit Outlet. Harap pilih peran akses khusus Outlet.`);
+      return;
+    }
+
+    if (!isTargetOutlet && isRoleOutlet) {
+      setFormError(`Lokasi "${targetLoc?.name || 'HO'}" merupakan unit Head Office. Peran Outlet tidak dapat ditugaskan pada unit HO.`);
+      return;
+    }
+
     // SweetAlert Confirmation
     const isConfirmed = await confirmAction(
       isEditMode ? 'Simpan Perubahan Pengguna?' : 'Buat Akun Pengguna Baru?',
-      `Akun ${formData.fullName} (${formData.username}) akan disimpan dengan peran ${formData.role}.`,
+      `Akun ${formData.fullName} (${formData.username}) akan disimpan dengan peran ${formData.role} di lokasi ${targetLoc?.name || ''}.`,
       isEditMode ? 'Ya, Simpan' : 'Ya, Daftarkan'
     );
 
@@ -245,14 +323,14 @@ export default function MasterUsersPage() {
         </div>
 
         {/* Filter bar */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex items-center gap-3 focus-within:ring-2 focus-within:ring-emerald-500 focus-within:border-emerald-700 transition-all">
+        <div className="bg-white border border-slate-200 rounded-2xl p-3 shadow-sm flex items-center gap-3 focus-within:ring-2 focus-within:ring-emerald-500 transition-all">
           <Search className="w-4 h-4 text-slate-400 ml-1.5" />
           <input
             type="text"
             placeholder="Cari berdasarkan nama, username, role, atau lokasi cabang..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-transparent text-xs text-slate-900 focus:outline-none placeholder:text-slate-400"
+            className="w-full bg-transparent text-xs text-slate-900 focus:outline-none"
           />
           {search && (
             <button
@@ -338,11 +416,10 @@ export default function MasterUsersPage() {
                           <button
                             onClick={() => handleDeleteUser(u)}
                             disabled={currentUser?.id === u.id || deletingId === u.id}
-                            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors inline-flex items-center gap-1 ${
-                              currentUser?.id === u.id
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors inline-flex items-center gap-1 ${currentUser?.id === u.id
                                 ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-50'
                                 : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
-                            }`}
+                              }`}
                             title={currentUser?.id === u.id ? 'Tidak dapat menghapus akun Anda sendiri' : 'Hapus Pengguna'}
                           >
                             {deletingId === u.id ? (
@@ -395,7 +472,7 @@ export default function MasterUsersPage() {
                     value={formData.fullName}
                     onChange={(e) => setFormData({ ...formData, fullName: e.target.value })}
                     placeholder="Contoh: Budi Santoso"
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -408,7 +485,7 @@ export default function MasterUsersPage() {
                     value={formData.username}
                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}
                     placeholder="Contoh: budi.spv"
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700 disabled:bg-slate-100 disabled:text-slate-500"
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
 
@@ -423,7 +500,7 @@ export default function MasterUsersPage() {
                       value={formData.password}
                       onChange={(e) => setFormData({ ...formData, password: e.target.value })}
                       placeholder={isEditMode ? 'Biarkan kosong jika tidak diubah' : 'Minimal 6 karakter'}
-                      className="w-full p-2.5 pr-10 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                      className="w-full p-2.5 pr-10 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                     <button
                       type="button"
@@ -436,34 +513,58 @@ export default function MasterUsersPage() {
                   </div>
                 </div>
 
+                {/* 1. Lokasi Vault Penempatan */}
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Peran Akses (Role)</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-700 font-semibold">Lokasi Vault Penempatan</label>
+                    {selectedLocation && (
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${isOutletLocation
+                            ? 'bg-blue-50 text-blue-700 border-blue-200'
+                            : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                          }`}
+                      >
+                        {isOutletLocation ? 'Unit Outlet / Cabang' : 'Unit Head Office (HO)'}
+                      </span>
+                    )}
+                  </div>
                   <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    value={formData.locationId}
+                    onChange={(e) => handleLocationChange(e.target.value)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    {availableRoles.map((r) => (
-                      <option key={r.value} value={r.value}>
-                        {r.label}
+                    {locations.map((loc) => (
+                      <option key={loc.id} value={loc.id}>
+                        {loc.name} ({loc.code} - {loc.type === 'OUTLET_HUB' ? 'OUTLET_HUB' : 'HEAD_OFFICE'})
                       </option>
                     ))}
                   </select>
                 </div>
 
+                {/* 2. Peran Akses (Role) - Filtered Strictly by Location Type */}
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Lokasi Vault</label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-slate-700 font-semibold">Peran Akses (Role)</label>
+                    <span className="text-[11px] font-semibold text-slate-500">
+                      {isOutletLocation ? 'Khusus Peran Outlet' : 'Khusus Peran Head Office'}
+                    </span>
+                  </div>
                   <select
-                    value={formData.locationId}
-                    onChange={(e) => setFormData({ ...formData, locationId: e.target.value })}
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
+                    value={formData.role}
+                    onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   >
-                    {locations.map((loc) => (
-                      <option key={loc.id} value={loc.id}>
-                        {loc.name} ({loc.code} - {loc.type})
+                    {filteredRolesForLocation.map((r) => (
+                      <option key={r.value} value={r.value}>
+                        {r.label}
                       </option>
                     ))}
                   </select>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    {isOutletLocation
+                      ? '✓ Menampilkan peran operasional khusus brankas & kasir Outlet Cabang'
+                      : '✓ Menampilkan peran operasional khusus pengelolaan vault pusat Head Office (HO)'}
+                  </p>
                 </div>
 
                 {isEditMode && (

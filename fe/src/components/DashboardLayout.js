@@ -43,39 +43,38 @@ export default function DashboardLayout({ children }) {
   };
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-  const isHO = user?.location?.type === 'HEAD_OFFICE' || user?.role?.startsWith('HO_');
-  const userPerms = user?.permissions || [];
-  const hasPerm = (perm) => isSuperAdmin || userPerms.includes(perm);
+  const userPerms = Array.isArray(user?.permissions) ? user.permissions : [];
+
+  // Strict & dynamic check per-menu permission
+  const hasPerm = (menuKey, legacyKey) => {
+    if (isSuperAdmin) return true;
+    if (userPerms.includes(menuKey)) return true;
+    if (legacyKey && userPerms.includes(legacyKey)) return true;
+    return false;
+  };
 
   const menuSections = [
     // Super Admin / Master Section
     {
       title: 'SUPER ADMIN',
-      items: isSuperAdmin
-        ? [
-          { name: 'Dashboard Super Admin', href: '/admin/dashboard', icon: LayoutDashboard },
-          { name: 'Master Pengguna (Users)', href: '/admin/users', icon: Users },
-          { name: 'Master Unit & Lokasi', href: '/admin/locations', icon: MapPin },
-          { name: 'Master Peran & Hak Akses', href: '/admin/roles', icon: KeyRound },
-        ]
-        : [
-          ...(hasPerm('DASHBOARD_ADMIN') ? [{ name: 'Dashboard Admin', href: '/admin/dashboard', icon: LayoutDashboard }] : []),
-          ...(hasPerm('MASTER_USERS') ? [{ name: 'Master Pengguna', href: '/admin/users', icon: Users }] : []),
-          ...(hasPerm('MASTER_LOCATIONS') ? [{ name: 'Master Unit & Lokasi', href: '/admin/locations', icon: MapPin }] : []),
-          ...(hasPerm('MASTER_ROLES') ? [{ name: 'Master Peran & Hak Akses', href: '/admin/roles', icon: KeyRound }] : []),
-        ],
+      items: [
+        ...(hasPerm('MENU_ADMIN_DASHBOARD', 'DASHBOARD_ADMIN') ? [{ name: 'Dashboard Super Admin', href: '/admin/dashboard', icon: LayoutDashboard }] : []),
+        ...(hasPerm('MENU_ADMIN_USERS', 'MASTER_USERS') ? [{ name: 'Master Pengguna (Users)', href: '/admin/users', icon: Users }] : []),
+        ...(hasPerm('MENU_ADMIN_LOCATIONS', 'MASTER_LOCATIONS') ? [{ name: 'Master Unit & Lokasi', href: '/admin/locations', icon: MapPin }] : []),
+        ...(hasPerm('MENU_ADMIN_ROLES', 'MASTER_ROLES') ? [{ name: 'Master Peran & Hak Akses', href: '/admin/roles', icon: KeyRound }] : []),
+      ],
     },
 
     // Head Office (HO) Section
     {
       title: 'HEAD OFFICE (HO)',
       items: [
-        ...((isSuperAdmin || hasPerm('DASHBOARD_HO') || isHO) ? [{ name: 'Dashboard Vault HO', href: '/ho/dashboard', icon: Building2 }] : []),
-        ...((isSuperAdmin || hasPerm('HO_INBOUND') || isHO) ? [{ name: 'PO Inbound (Pengadaan)', href: '/ho/inbound', icon: Box }] : []),
-        ...((isSuperAdmin || hasPerm('HO_CABINETS') || isHO) ? [{ name: 'Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
-        ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
-        ...((isSuperAdmin || hasPerm('HO_ORDERS') || isHO) ? [{ name: 'PO Outlet & Picking Emas', href: '/ho/orders', icon: ShoppingCart }] : []),
-        ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Lacak & Riwayat Emas', href: '/ho/history', icon: History }] : []),
+        ...(hasPerm('MENU_HO_DASHBOARD', 'DASHBOARD_HO') ? [{ name: 'Dashboard Vault HO', href: '/ho/dashboard', icon: Building2 }] : []),
+        ...(hasPerm('MENU_HO_INBOUND', 'HO_INBOUND') ? [{ name: 'PO Inbound (Pengadaan)', href: '/ho/inbound', icon: Box }] : []),
+        ...(hasPerm('MENU_HO_CABINETS', 'HO_CABINETS') ? [{ name: 'Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
+        ...(hasPerm('MENU_HO_INVENTORY', 'HO_INVENTORY') ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
+        ...(hasPerm('MENU_HO_ORDERS', 'HO_ORDERS') ? [{ name: 'PO Outlet & Picking Emas', href: '/ho/orders', icon: ShoppingCart }] : []),
+        ...(hasPerm('MENU_HO_HISTORY', 'HO_HISTORY') ? [{ name: 'Lacak & Riwayat Emas', href: '/ho/history', icon: History }] : []),
       ],
     },
 
@@ -83,12 +82,12 @@ export default function DashboardLayout({ children }) {
     {
       title: 'OUTLET / CABANG',
       items: [
-        ...((isSuperAdmin || hasPerm('DASHBOARD_OUTLET') || !isHO) ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_INVENTORY') || !isHO) ? [{ name: 'Inventori Emas Cabang', href: '/outlet/inventory', icon: Package }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_CABINETS') || !isHO) ? [{ name: 'Lemari & Baki RFID', href: '/outlet/cabinets', icon: Layers }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_ORDERS') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'PO Inbound (Request ke HO)', href: '/outlet/orders', icon: ShoppingCart }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_OUTBOUND') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'PO Outbound & Mutasi Emas', href: '/outlet/outbound', icon: ArrowLeftRight }] : []),
-        ...((isSuperAdmin || hasPerm('OUTLET_INVENTORY') || !isHO) ? [{ name: 'Lacak & Riwayat Emas', href: '/outlet/history', icon: History }] : []),
+        ...(hasPerm('MENU_OUTLET_DASHBOARD', 'DASHBOARD_OUTLET') ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }] : []),
+        ...(hasPerm('MENU_OUTLET_INVENTORY', 'OUTLET_INVENTORY') ? [{ name: 'Inventori Emas Cabang', href: '/outlet/inventory', icon: Package }] : []),
+        ...(hasPerm('MENU_OUTLET_CABINETS', 'OUTLET_CABINETS') ? [{ name: 'Lemari & Baki RFID', href: '/outlet/cabinets', icon: Layers }] : []),
+        ...(hasPerm('MENU_OUTLET_ORDERS', 'OUTLET_ORDERS') ? [{ name: 'PO Inbound (Request ke HO)', href: '/outlet/orders', icon: ShoppingCart }] : []),
+        ...(hasPerm('MENU_OUTLET_OUTBOUND', 'OUTLET_OUTBOUND') ? [{ name: 'PO Outbound & Mutasi Emas', href: '/outlet/outbound', icon: ArrowLeftRight }] : []),
+        ...(hasPerm('MENU_OUTLET_HISTORY', 'OUTLET_HISTORY') ? [{ name: 'Lacak & Riwayat Emas', href: '/outlet/history', icon: History }] : []),
       ],
     },
 
@@ -96,9 +95,7 @@ export default function DashboardLayout({ children }) {
     {
       title: 'SISTEM & AUDIT',
       items: [
-        ...((isSuperAdmin || hasPerm('AUDIT_LOG') || user?.role === 'SPI_AUDITOR' || user?.role === 'HO_SUPERVISOR' || user?.role === 'OUTLET_SUPERVISOR')
-          ? [{ name: 'Audit Trail & Log', href: '/audit', icon: FileText }]
-          : []),
+        ...(hasPerm('MENU_AUDIT_LOG', 'AUDIT_LOG') ? [{ name: 'Audit Trail & Log', href: '/audit', icon: FileText }] : []),
       ],
     },
   ].filter((section) => section.items.length > 0);
