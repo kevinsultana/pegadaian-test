@@ -3,7 +3,10 @@ const { authenticate } = require('../middlewares/auth.middleware');
 const {
   listHoOrders,
   getHoOrderDetail,
+  checkStock,
+  getAvailableItemsForPo,
   approveByHoSpv,
+  holdForRestock,
   rejectByHo,
   startPicking,
   verifyPickingStep,
@@ -24,8 +27,11 @@ const router = express.Router();
 
 router.get('/', authenticate, listHoOrders);
 router.get('/:id/surat-jalan', authenticate, getSuratJalan);
+router.get('/:id/check-stock', authenticate, checkStock);
+router.get('/:id/available-items', authenticate, getAvailableItemsForPo);
 router.get('/:id', authenticate, getHoOrderDetail);
 router.patch('/:id/approve', authenticate, approveByHoSpv);
+router.patch('/:id/hold-restock', authenticate, holdForRestock);
 router.patch('/:id/reject', authenticate, rejectByHo);
 router.patch('/:id/start-picking', authenticate, startPicking);
 router.post('/:id/verify-step', authenticate, verifyPickingStep);

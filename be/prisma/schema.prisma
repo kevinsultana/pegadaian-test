@@ -42,10 +42,20 @@ enum ItemStatus {
   SOLD             // Terjual / Eksekusi Lelang
 }
 
+enum InboundStatus {
+  DRAFT                // Dibuat oleh Staff HO
+  PENDING_APPROVAL     // Menunggu persetujuan Supervisor HO
+  APPROVED             // Disetujui oleh Supervisor HO (siap terima barang)
+  RECEIVING            // Barang fisik tiba, sedang proses put-away ke vault
+  COMPLETED            // Semua keping telah tersimpan di vault
+  REJECTED             // Ditolak oleh Supervisor HO
+}
+
 enum POStatus {
   DRAFT                // Dibuat oleh Outlet Staff (belum disubmit)
   PENDING_OUTLET_SPV   // Menunggu persetujuan Supervisor Outlet
   SUBMITTED_TO_HO      // Dikirim ke HO, menunggu review HO
+  WAITING_RESTOCK      // Menunggu stok fisik masuk di HO (pengadaan / inbound)
   APPROVED_HO          // Disetujui HO Supervisor
   PICKING              // Sedang dipilih dari lemari HO (QR scan)
   PARTIAL_HOLD         // Sebagian dikirim, sebagian masih pending
@@ -132,6 +142,7 @@ model CabinetSlot {
   cabinetId    String
   cabinet      Cabinet         @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
   modularType  SlotModularType @default(BIG_DRAWER)
+  qrCode       String?         @unique // e.g. "QR-HO-CAB-01-SLOT-01"
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
@@ -186,6 +197,8 @@ model Item {
 
   histories       ItemHistory[]
   poItems         POItem[]
+  inboundOrderId  String?
+  inboundOrder    InboundOrder? @relation("InboundItems", fields: [inboundOrderId], references: [id], onDelete: SetNull)
 
   @@map("items")
 }
@@ -226,6 +239,7 @@ model PurchaseOrder {
   vehicleNumber        String?       // Nomor kendaraan
   pickerName           String?       // Nama petugas HO yang picking
   partialDispatchNote  String?       // Catatan partial dispatch
+  hoNote               String?       // Catatan HO Supervisor (misal: info stok/restock)
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
@@ -243,6 +257,7 @@ model PORequestLine {
   weightGrams   Float         // 5, 10, 25, 50, 100
   qtyRequested  Int
   qtyFulfilled  Int           @default(0)
+  qtyApproved   Int?          // Kuantitas yang disetujui HO untuk dikirim
   notes         String?
   createdAt     DateTime      @default(now())
 
@@ -255,9 +270,49 @@ model POItem {
   po              PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
   itemId          String
   item            Item          @relation(fields: [itemId], references: [id], onDelete: Restrict)
+  isPicked        Boolean       @default(false)
+  pickedAt        DateTime?
 
   @@unique([poId, itemId])
   @@map("po_items")
+}
+
+// -------------------------------------------------------------
+// PENGADAAN & INBOUND VAULT HO
+// -------------------------------------------------------------
+
+model InboundOrder {
+  id             String             @id // e.g. "INB-202611-0001"
+  supplierName   String             // e.g. "PT ANTAM (Persero) Tbk", "Galeri 24", "PT UBS"
+  status         InboundStatus      @default(DRAFT)
+  notes          String?
+  requestedBy    String             // username staff
+  approvedBy     String?            // username supervisor HO
+  receivedBy     String?            // username staff penerima
+  expectedDate   DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  lines          InboundOrderLine[]
+  items          Item[]             @relation("InboundItems")
+
+  @@map("inbound_orders")
+}
+
+model InboundOrderLine {
+  id             String       @id @default(uuid())
+  inboundOrderId String
+  inboundOrder   InboundOrder @relation(fields: [inboundOrderId], references: [id], onDelete: Cascade)
+  goldBrand      String       // "ANTAM", "UBS", "Galeri24"
+  weightGrams    Float        // 1, 2, 5, 10, 25, 50, 100
+  purity         String       @default("999.9")
+  qtyRequested   Int
+  qtyReceived    Int          @default(0)
+  notes          String?
+  createdAt      DateTime     @default(now())
+
+  @@map("inbound_order_lines")
 }
 
 // -------------------------------------------------------------

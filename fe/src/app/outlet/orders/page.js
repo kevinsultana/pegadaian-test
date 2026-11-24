@@ -15,6 +15,7 @@ const STATUS_CONFIG = {
   DRAFT: { label: 'Draft', color: 'bg-slate-100 text-slate-600', icon: FileText },
   PENDING_OUTLET_SPV: { label: 'Menunggu SPV', color: 'bg-amber-100 text-amber-700', icon: Clock },
   SUBMITTED_TO_HO: { label: 'Dikirim ke HO', color: 'bg-blue-100 text-blue-700', icon: Send },
+  WAITING_RESTOCK: { label: 'Menunggu Restock HO', color: 'bg-amber-100 text-amber-800', icon: AlertCircle },
   APPROVED_HO: { label: 'Disetujui HO', color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
   PICKING: { label: 'Proses Picking', color: 'bg-violet-100 text-violet-700', icon: Package },
   PARTIAL_HOLD: { label: 'Dikirim Sebagian', color: 'bg-orange-100 text-orange-700', icon: AlertCircle },
@@ -222,6 +223,33 @@ function PoDetailModal({ po, onClose, onRefresh, userRole }) {
             {detail.trackingNumber && <div className="col-span-2"><span className="text-slate-500">No. Surat Jalan:</span><span className="ml-2 font-medium text-emerald-700">{detail.trackingNumber}</span></div>}
           </div>
 
+          {/* Warning Banner if WAITING_RESTOCK */}
+          {detail.status === 'WAITING_RESTOCK' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-amber-900 space-y-2">
+              <div className="flex items-center gap-2">
+                <AlertCircle size={18} className="text-amber-600 shrink-0" />
+                <p className="font-semibold text-sm text-amber-800">PO Sedang Ditahan — Menunggu Restock di Head Office</p>
+              </div>
+              <p className="text-xs text-amber-700">
+                Stok fisik emas di Vault HO saat ini belum mencukupi atau sedang menunggu pengadaan inbound. HO akan memproses pengiriman setelah fisik emas tersedia.
+              </p>
+              {detail.hoNote && (
+                <div className="mt-2 pt-2 border-t border-amber-200/60 text-xs">
+                  <span className="font-semibold text-amber-800">Catatan / Estimasi dari HO:</span>
+                  <p className="text-amber-900 mt-0.5 font-medium">{detail.hoNote}</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Notice if partial dispatch or special HO Note */}
+          {detail.status !== 'WAITING_RESTOCK' && detail.hoNote && (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-900 space-y-1">
+              <p className="font-semibold text-blue-800">Keterangan / Catatan dari HO:</p>
+              <p className="text-blue-700">{detail.hoNote}</p>
+            </div>
+          )}
+
           <div>
             <h3 className="text-sm font-semibold text-slate-700 mb-2">Permintaan Emas ({totalFulfilled}/{totalQty} terpenuhi)</h3>
             <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -231,6 +259,8 @@ function PoDetailModal({ po, onClose, onRefresh, userRole }) {
                     <th className="px-4 py-2 text-left">Merk</th>
                     <th className="px-4 py-2 text-left">Berat</th>
                     <th className="px-4 py-2 text-center">Diminta</th>
+                    <th className="px-4 py-2 text-center">Stok HO</th>
+                    <th className="px-4 py-2 text-center">Disetujui</th>
                     <th className="px-4 py-2 text-center">Terpenuhi</th>
                   </tr>
                 </thead>
@@ -239,10 +269,24 @@ function PoDetailModal({ po, onClose, onRefresh, userRole }) {
                     <tr key={line.id} className="hover:bg-slate-50">
                       <td className="px-4 py-2.5 font-medium text-slate-700">{line.goldBrand}</td>
                       <td className="px-4 py-2.5 text-slate-600">{line.weightGrams}g</td>
-                      <td className="px-4 py-2.5 text-center text-slate-700">{line.qtyRequested}</td>
+                      <td className="px-4 py-2.5 text-center text-slate-700 font-semibold">{line.qtyRequested}</td>
                       <td className="px-4 py-2.5 text-center">
-                        <span className={line.qtyFulfilled >= line.qtyRequested ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'}>
-                          {line.qtyFulfilled}
+                        <span className={`px-2 py-0.5 rounded text-xs font-mono font-medium ${
+                          line.availableStock >= line.qtyRequested
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : line.availableStock > 0
+                              ? 'bg-amber-100 text-amber-800'
+                              : 'bg-red-100 text-red-800'
+                        }`}>
+                          {line.availableStock ?? '-'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center text-slate-700 font-medium">
+                        {line.qtyApproved !== null && line.qtyApproved !== undefined ? line.qtyApproved : line.qtyRequested}
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={line.qtyFulfilled >= (line.qtyApproved ?? line.qtyRequested) ? 'text-emerald-600 font-medium' : 'text-amber-600 font-medium'}>
+                          {line.qtyFulfilled} / {line.qtyApproved ?? line.qtyRequested}
                         </span>
                       </td>
                     </tr>
@@ -364,7 +408,7 @@ export default function OutletOrdersPage() {
     }
   }, [fetchOrders, authLoading]);
 
-  const statuses = ['', 'DRAFT', 'PENDING_OUTLET_SPV', 'SUBMITTED_TO_HO', 'APPROVED_HO', 'PICKING', 'DISPATCHED', 'PARTIAL_HOLD', 'RECEIVED', 'REJECTED'];
+  const statuses = ['', 'DRAFT', 'PENDING_OUTLET_SPV', 'SUBMITTED_TO_HO', 'WAITING_RESTOCK', 'APPROVED_HO', 'PICKING', 'DISPATCHED', 'PARTIAL_HOLD', 'RECEIVED', 'REJECTED'];
 
   return (
     <DashboardLayout>

@@ -4,6 +4,7 @@ const hoCabinetRoutes = require('./hoCabinet.routes');
 const hoInventoryRoutes = require('./hoInventory.routes');
 const hoCheckoutRoutes = require('./hoCheckout.routes');
 const hoOrderRoutes = require('./hoOrder.routes');
+const hoInboundRoutes = require('./hoInbound.routes');
 const outletOrderRoutes = require('./outletOrder.routes');
 const auditRoutes = require('./audit.routes');
 const masterRoutes = require('./master.routes');
@@ -31,6 +32,7 @@ router.use('/ho', hoCabinetRoutes);
 router.use('/ho', hoInventoryRoutes);
 router.use('/ho', hoCheckoutRoutes);
 router.use('/ho/orders', hoOrderRoutes);
+router.use('/ho/inbound', hoInboundRoutes);
 
 // Outlet Management
 router.use('/outlet/orders', outletOrderRoutes);

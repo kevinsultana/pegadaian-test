@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
 import DashboardLayout from '@/components/DashboardLayout';
 import { apiRequest } from '@/lib/api';
 import { showToast, confirmAction, alertSuccess, alertError } from '@/lib/alerts';
@@ -24,26 +25,8 @@ export default function HOInventoryPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
 
-  // Modal Inbound
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState('');
-
   // Detail & QR Modal
   const [qrModal, setQrModal] = useState({ isOpen: false, item: null });
-
-  // Inbound Form Data
-  const [formData, setFormData] = useState({
-    serialNumber: '',
-    goldType: 'ANTAM_BAR',
-    weightGrams: 10,
-    purity: '99.99%',
-    drawerCode: '',
-    slotPosition: 1,
-    notes: 'Penerimaan Inbound Batch Baru HO',
-  });
-
-  const [availableDrawers, setAvailableDrawers] = useState([]);
 
   const fetchData = async () => {
     try {
@@ -61,11 +44,6 @@ export default function HOInventoryPage() {
       setItems(safeItems);
       const cabs = cabRes.data?.cabinets || (Array.isArray(cabRes.data) ? cabRes.data : []);
       setCabinets(cabs);
-
-      // Collect drawers from first cabinet
-      if (cabs.length > 0) {
-        loadDrawersForCabinet(cabs[0].code);
-      }
     } catch (err) {
       console.error(err);
       showToast.error('Gagal memuat inventori emas');
@@ -74,78 +52,9 @@ export default function HOInventoryPage() {
     }
   };
 
-  const loadDrawersForCabinet = async (cabCode) => {
-    try {
-      const res = await apiRequest(`/ho/cabinets/${cabCode}`);
-      const cab = res.data?.cabinet;
-      const drws = [];
-      cab?.slots?.forEach((s) => {
-        s.drawers?.forEach((d) => drws.push(d));
-      });
-      setAvailableDrawers(drws);
-      if (drws.length > 0 && !formData.drawerCode) {
-        setFormData((prev) => ({ ...prev, drawerCode: drws[0].code }));
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
   useEffect(() => {
     fetchData();
   }, []);
-
-  const openInboundModal = () => {
-    const randomSerial = `LM-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`;
-    setFormData((prev) => ({
-      ...prev,
-      serialNumber: randomSerial,
-    }));
-    setFormError('');
-    setIsModalOpen(true);
-  };
-
-  const handleInboundSubmit = async (e) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setFormError('');
-
-    try {
-      const res = await apiRequest('/ho/inventory/inbound', {
-        method: 'POST',
-        body: JSON.stringify({
-          serialNumber: formData.serialNumber,
-          goldType: formData.goldType,
-          weightGrams: parseFloat(formData.weightGrams),
-          purity: formData.purity,
-          drawerCode: formData.drawerCode,
-          slotPosition: parseInt(formData.slotPosition, 10),
-          notes: formData.notes,
-        }),
-      });
-
-      showToast.success(`Keping emas ${formData.serialNumber} berhasil didaftarkan ke ${formData.drawerCode}`);
-      alertSuccess(
-        'Inbound Berhasil!',
-        `Keping emas ${formData.serialNumber} (${formData.goldType} ${formData.weightGrams}g) berhasil disimpan ke ${formData.drawerCode}.`
-      );
-
-      setIsModalOpen(false);
-      fetchData();
-
-      // Langsung buka modal cetak QR
-      if (res.data) {
-        openQrModal(res.data);
-      }
-    } catch (err) {
-      const errMsg = err.message || 'Gagal registrasi item';
-      setFormError(errMsg);
-      showToast.error(errMsg);
-      alertError('Gagal Inbound', errMsg);
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   const openQrModal = async (item) => {
     try {
@@ -197,17 +106,17 @@ export default function HOInventoryPage() {
               <span>Inventori Vault HO & Cetak QR Code</span>
             </h1>
             <p className="text-xs text-slate-500 mt-1">
-              Penerimaan keping emas baru (Inbound), penandaan QR unik per keping, pemetaan slot laci, dan pencetakan label stiker QR.
+              Monitoring fisik stok emas vault HO, pencarian nomor seri, pemetaan laci, dan pencetakan stiker QR code.
             </p>
           </div>
 
-          <button
-            onClick={openInboundModal}
+          <Link
+            href="/ho/inbound"
             className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl text-xs flex items-center gap-2 shadow-sm transition-colors self-start sm:self-auto"
           >
-            <Plus className="w-4 h-4" />
-            <span>Inbound Emas Baru</span>
-          </button>
+            <Box className="w-4 h-4" />
+            <span>Ke Menu PO Inbound</span>
+          </Link>
         </div>
 
         {/* Search Bar */}
@@ -300,120 +209,6 @@ export default function HOInventoryPage() {
             </table>
           </div>
         </div>
-
-        {/* Modal Inbound Emas Baru */}
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 shadow-2xl">
-              <div className="flex items-center justify-between pb-3.5 border-b border-slate-100 mb-4">
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Box className="w-4 h-4 text-emerald-700" />
-                  <span>Inbound Keping Emas Baru (HO)</span>
-                </h3>
-                <button
-                  onClick={() => setIsModalOpen(false)}
-                  className="text-slate-400 hover:text-slate-600"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {formError && (
-                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{formError}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleInboundSubmit} className="space-y-3.5 text-xs">
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Nomor Seri Fisik (Serial Number)</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.serialNumber}
-                    onChange={(e) => setFormData({ ...formData, serialNumber: e.target.value.toUpperCase() })}
-                    placeholder="Contoh: LM-2026-9901"
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Tipe Logam Mulia</label>
-                    <select
-                      value={formData.goldType}
-                      onChange={(e) => setFormData({ ...formData, goldType: e.target.value })}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                    >
-                      <option value="ANTAM_BAR">Antam CertiCard</option>
-                      <option value="UBS_BAR">UBS Gold Bar</option>
-                      <option value="GALERI24_BAR">Galeri 24 Baby Gold</option>
-                      <option value="BATANGAN_BESAR">Emas Batangan Besar (Cast)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-700 font-semibold mb-1">Berat (Gram)</label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      required
-                      value={formData.weightGrams}
-                      onChange={(e) => setFormData({ ...formData, weightGrams: e.target.value })}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Pilih Lemari & Laci Tujuan</label>
-                  <select
-                    value={formData.drawerCode}
-                    onChange={(e) => setFormData({ ...formData, drawerCode: e.target.value })}
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                  >
-                    {availableDrawers.map((d) => (
-                      <option key={d.id} value={d.code}>
-                        {d.code} - {d.name} ({d.capacity} max)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Posisi Slot Grid di Laci</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={200}
-                    value={formData.slotPosition}
-                    onChange={(e) => setFormData({ ...formData, slotPosition: e.target.value })}
-                    className="w-full p-2.5 bg-white border border-slate-300 rounded-xl text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-700"
-                  />
-                </div>
-
-                <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium transition-colors"
-                  >
-                    Batal
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-xl shadow-sm flex items-center gap-2 disabled:opacity-50 transition-colors"
-                  >
-                    {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-                    <span>Registrasi & Generate QR</span>
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
 
         {/* Modal Tampilan QR Code untuk Cetak Label */}
         {qrModal.isOpen && (

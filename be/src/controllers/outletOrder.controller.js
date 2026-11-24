@@ -67,7 +67,53 @@ const getOutletOrderDetail = async (req, res) => {
     });
 
     if (!po) return sendError(res, 'PO tidak ditemukan', 404);
-    return sendSuccess(res, po, 'Detail PO berhasil diambil');
+
+    // Hitung stok ketersediaan di HO
+    const linesWithStock = await Promise.all(
+      (po.requestLines || []).map(async (line) => {
+        const availableCount = await prisma.item.count({
+          where: {
+            currentStatus: 'IN_HO',
+            weight: Number(line.weightGrams),
+            drawerId: { not: null },
+            OR: [
+              { brand: { equals: line.goldBrand, mode: 'insensitive' } },
+              { brand: { contains: line.goldBrand, mode: 'insensitive' } },
+            ],
+          },
+        });
+        const shortage = Math.max(0, line.qtyRequested - availableCount);
+        let stockStatus = 'FULL';
+        if (availableCount === 0) stockStatus = 'EMPTY';
+        else if (availableCount < line.qtyRequested) stockStatus = 'PARTIAL';
+
+        return {
+          ...line,
+          availableStock: availableCount,
+          shortage,
+          stockStatus,
+        };
+      })
+    );
+
+    let overallStockStatus = 'ALL_AVAILABLE';
+    if (linesWithStock.length === 0) {
+      overallStockStatus = 'ALL_AVAILABLE';
+    } else if (linesWithStock.every((l) => l.stockStatus === 'EMPTY')) {
+      overallStockStatus = 'OUT_OF_STOCK';
+    } else if (linesWithStock.some((l) => l.stockStatus !== 'FULL')) {
+      overallStockStatus = 'PARTIALLY_AVAILABLE';
+    }
+
+    return sendSuccess(
+      res,
+      {
+        ...po,
+        requestLines: linesWithStock,
+        overallStockStatus,
+      },
+      'Detail PO berhasil diambil'
+    );
   } catch (err) {
     console.error(err);
     return sendError(res, 'Gagal mengambil detail PO', 500);

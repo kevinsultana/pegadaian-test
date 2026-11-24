@@ -142,9 +142,9 @@ const getCabinetByCode = async (req, res, next) => {
     let totalCapacity = 0;
     let totalOccupied = 0;
     for (const slot of cabinet.slots) {
-      const slotPayload = `PGD-HO-SLOT:${cabinet.code}-SL${String(slot.slotNumber).padStart(2, '0')}`;
-      slot.qrCode = `QR-${cabinet.code}-SL${String(slot.slotNumber).padStart(2, '0')}`;
-      slot.qrDataUrl = await generateQrDataUrl(slotPayload);
+      const standardSlotQr = slot.qrCode || `QR-${cabinet.code}-SLOT-${String(slot.slotNumber).padStart(2, '0')}`;
+      slot.qrCode = standardSlotQr;
+      slot.qrDataUrl = await generateQrDataUrl(standardSlotQr);
 
       for (const drw of slot.drawers) {
         totalCapacity += drw.capacity;

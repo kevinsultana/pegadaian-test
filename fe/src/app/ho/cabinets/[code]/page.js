@@ -1435,7 +1435,7 @@ function CabinetDetailContent() {
                 )}
 
                 <div className="text-base font-bold font-mono tracking-tight text-slate-900">
-                  {cabinet?.code}-SL0{slotQrModal.slot.slotNumber}
+                  {cabinet?.code}-SLOT-{String(slotQrModal.slot.slotNumber).padStart(2, '0')}
                 </div>
                 <div className="text-xs font-semibold text-slate-700 mt-0.5">
                   Slot Modular #{slotQrModal.slot.slotNumber} ({cabinet?.name})
