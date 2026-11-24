@@ -481,12 +481,136 @@ const getSuratJalan = async (req, res) => {
   }
 };
 
+// POST /api/ho/orders/:id/verify-step - Verifikasi langkah scan picking
+const verifyPickingStep = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { step, cabinetQr, slotNumber, drawerQr, itemQr } = req.body;
+
+    const po = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: { requestLines: true, items: true },
+    });
+    if (!po) return sendError(res, 'PO tidak ditemukan', 404);
+    if (po.status !== 'PICKING') {
+      return sendError(res, 'PO tidak sedang dalam proses picking', 400);
+    }
+
+    if (step === 'cabinet') {
+      if (!cabinetQr) return sendError(res, 'QR Code Lemari diperlukan', 400);
+      const cabinet = await prisma.cabinet.findUnique({
+        where: { qrCode: cabinetQr },
+        include: { location: { select: { name: true, code: true } } },
+      });
+      if (!cabinet) return sendError(res, 'QR Code Lemari tidak ditemukan di database HO', 404);
+      return sendSuccess(res, {
+        valid: true,
+        step: 'cabinet',
+        locationName: `${cabinet.name} (${cabinet.code})`,
+        details: `Lokasi: ${cabinet.location?.name || 'Vault HO'} • Kapasitas: ${cabinet.totalSlots} Slot`,
+        cabinet: { id: cabinet.id, code: cabinet.code, name: cabinet.name, qrCode: cabinet.qrCode },
+      }, `Lemari ${cabinet.code} terverifikasi`);
+    }
+
+    if (step === 'slot') {
+      if (!cabinetQr || !slotNumber) return sendError(res, 'Cabinet QR dan nomor slot diperlukan', 400);
+      const cabinet = await prisma.cabinet.findUnique({ where: { qrCode: cabinetQr } });
+      if (!cabinet) return sendError(res, 'Lemari tidak valid', 404);
+      const slot = await prisma.cabinetSlot.findFirst({
+        where: { cabinetId: cabinet.id, slotNumber: Number(slotNumber) },
+        include: { drawers: true },
+      });
+      if (!slot) return sendError(res, `Slot ${slotNumber} tidak ditemukan di lemari ${cabinet.code}`, 404);
+      const slotType = slot.modularType === 'BIG_DRAWER' ? 'Laci Besar (1 Unit)' : 'Klaster Laci Kecil (8 Unit)';
+      return sendSuccess(res, {
+        valid: true,
+        step: 'slot',
+        locationName: `Slot ${slot.slotNumber} - ${cabinet.code}`,
+        details: `Tipe: ${slotType} • Tersedia: ${slot.drawers.length} laci`,
+        slot: { id: slot.id, slotNumber: slot.slotNumber, modularType: slot.modularType },
+      }, `Slot ${slot.slotNumber} terverifikasi`);
+    }
+
+    if (step === 'drawer') {
+      if (!cabinetQr || !slotNumber || !drawerQr) return sendError(res, 'Data lemari, slot, dan QR laci diperlukan', 400);
+      const cabinet = await prisma.cabinet.findUnique({ where: { qrCode: cabinetQr } });
+      if (!cabinet) return sendError(res, 'Lemari tidak valid', 404);
+      const slot = await prisma.cabinetSlot.findFirst({
+        where: { cabinetId: cabinet.id, slotNumber: Number(slotNumber) },
+      });
+      if (!slot) return sendError(res, 'Slot tidak valid', 404);
+      const drawer = await prisma.drawer.findFirst({
+        where: { qrCode: drawerQr, slotId: slot.id },
+      });
+      if (!drawer) return sendError(res, `QR Code Laci tidak sesuai dengan Slot ${slotNumber} pada lemari ${cabinet.code}`, 404);
+      return sendSuccess(res, {
+        valid: true,
+        step: 'drawer',
+        locationName: `Laci ${drawer.name || drawer.code}`,
+        details: `Kode: ${drawer.code} • Kapasitas: ${drawer.capacity} keping (${drawer.category || 'Multi-Brand'})`,
+        drawer: { id: drawer.id, code: drawer.code, name: drawer.name, qrCode: drawer.qrCode },
+      }, `Laci ${drawer.code} terverifikasi`);
+    }
+
+    if (step === 'item') {
+      if (!cabinetQr || !slotNumber || !drawerQr || !itemQr) return sendError(res, 'Semua parameter diperlukan', 400);
+      const cabinet = await prisma.cabinet.findUnique({ where: { qrCode: cabinetQr } });
+      if (!cabinet) return sendError(res, 'Lemari tidak valid', 404);
+      const slot = await prisma.cabinetSlot.findFirst({
+        where: { cabinetId: cabinet.id, slotNumber: Number(slotNumber) },
+      });
+      if (!slot) return sendError(res, 'Slot tidak valid', 404);
+      const drawer = await prisma.drawer.findFirst({
+        where: { qrCode: drawerQr, slotId: slot.id },
+      });
+      if (!drawer) return sendError(res, 'Laci tidak valid', 404);
+      const item = await prisma.item.findFirst({
+        where: { qrCode: itemQr, drawerId: drawer.id },
+      });
+      if (!item) return sendError(res, 'QR Code Emas tidak ditemukan di laci ini', 404);
+      if (item.currentStatus !== 'IN_HO') {
+        return sendError(res, `Item tidak tersedia untuk picking (Status: ${item.currentStatus})`, 400);
+      }
+      const alreadyPicked = po.items.find((pi) => pi.itemId === item.id);
+      if (alreadyPicked) return sendError(res, 'Item ini sudah ada di dalam picking list PO ini', 400);
+
+      const matchedLine = po.requestLines.find((line) => {
+        const brandMatch =
+          line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
+          item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
+          line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+        return brandMatch && Number(line.weightGrams) === Number(item.weight);
+      });
+      if (!matchedLine) {
+        return sendError(res, `Item (${item.brand} ${item.weight}g) tidak sesuai dengan spesifikasi permintaan PO`, 400);
+      }
+      if (matchedLine.qtyFulfilled >= matchedLine.qtyRequested) {
+        return sendError(res, `Permintaan ${matchedLine.goldBrand} ${matchedLine.weightGrams}g sudah terpenuhi (${matchedLine.qtyFulfilled}/${matchedLine.qtyRequested})`, 400);
+      }
+
+      return sendSuccess(res, {
+        valid: true,
+        step: 'item',
+        locationName: `${item.brand} ${item.weight}g (Serial: ${item.id})`,
+        details: `Kemurnian: ${item.purity} • Status: Siap Dipicking`,
+        item: { id: item.id, brand: item.brand, weight: item.weight, qrCode: item.qrCode },
+      }, `Emas ${item.brand} ${item.weight}g cocok dengan permintaan PO`);
+    }
+
+    return sendError(res, 'Step tidak dikenal', 400);
+  } catch (err) {
+    console.error(err);
+    return sendError(res, 'Gagal memverifikasi langkah picking', 500);
+  }
+};
+
 module.exports = {
   listHoOrders,
   getHoOrderDetail,
   approveByHoSpv,
   rejectByHo,
   startPicking,
+  verifyPickingStep,
   scanItem,
   removePickedItem,
   dispatchOrder,

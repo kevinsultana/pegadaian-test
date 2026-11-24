@@ -6,6 +6,7 @@ const {
   approveByHoSpv,
   rejectByHo,
   startPicking,
+  verifyPickingStep,
   scanItem,
   removePickedItem,
   dispatchOrder,
@@ -27,6 +28,7 @@ router.get('/:id', authenticate, getHoOrderDetail);
 router.patch('/:id/approve', authenticate, approveByHoSpv);
 router.patch('/:id/reject', authenticate, rejectByHo);
 router.patch('/:id/start-picking', authenticate, startPicking);
+router.post('/:id/verify-step', authenticate, verifyPickingStep);
 router.patch('/:id/scan-item', authenticate, scanItem);
 router.patch('/:id/remove-item', authenticate, removePickedItem);
 router.patch('/:id/dispatch', authenticate, dispatchOrder);

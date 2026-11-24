@@ -3,10 +3,12 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 import { apiRequest } from '@/lib/api';
+import jsQR from 'jsqr';
 import {
   ShoppingCart, CheckCircle, XCircle, Truck, Package, Clock,
   Search, RefreshCw, Loader2, QrCode, Trash2, Printer, AlertTriangle,
-  ChevronRight, FileText, Send, Eye
+  ChevronRight, FileText, Send, Eye, Camera, CameraOff, CheckCircle2,
+  ArrowRight, RotateCcw, Box, Layers
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Swal from 'sweetalert2';
@@ -71,7 +73,7 @@ function SuratJalanModal({ suratJalan, onClose }) {
         <div className="flex-1 overflow-y-auto p-6" ref={printRef}>
           <h1>SURAT JALAN PENGIRIMAN EMAS</h1>
           <p className="subtitle">PT Pegadaian (Persero) — Smart Vault Management System</p>
-          
+
           <div className="grid grid-cols-2 gap-4 mb-5 text-sm">
             <div className="bg-slate-50 rounded-xl p-4 space-y-2">
               <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Informasi Dokumen</h3>
@@ -148,136 +150,562 @@ function SuratJalanModal({ suratJalan, onClose }) {
   );
 }
 
-// ─── SCAN ITEM MODAL ─────────────────────────────────────────────────────────
+// ─── SCAN ITEM MODAL DENGAN LIVE KAMERA (HTML5 VIDEO + jsQR) ─────────────────
 function ScanItemModal({ po, onClose, onItemAdded }) {
   const [step, setStep] = useState('cabinet'); // cabinet | slot | drawer | item
   const [cabinetQr, setCabinetQr] = useState('');
   const [slotNumber, setSlotNumber] = useState('');
   const [drawerQr, setDrawerQr] = useState('');
   const [itemQr, setItemQr] = useState('');
+
+  // Location Verification Info
+  const [verifiedInfo, setVerifiedInfo] = useState({
+    cabinet: null,
+    slot: null,
+    drawer: null,
+    item: null,
+  });
+
   const [loading, setLoading] = useState(false);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState('');
+  const [cameras, setCameras] = useState([]);
+  const [selectedCameraId, setSelectedCameraId] = useState('');
+  const [manualInput, setManualInput] = useState('');
+
+  // Refs for video & QR scanning
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const isScanningRef = useRef(false);
 
   const steps = [
-    { key: 'cabinet', label: 'Scan QR Lemari', hint: 'Scan QR Code pada lemari' },
-    { key: 'slot', label: 'Nomor Slot', hint: 'Masukkan nomor slot (1-8)' },
-    { key: 'drawer', label: 'Scan QR Laci', hint: 'Scan QR Code pada laci' },
-    { key: 'item', label: 'Scan QR Emas', hint: 'Scan QR Code pada keping emas' },
+    { key: 'cabinet', label: '1. Lemari', hint: 'Scan QR Lemari Vault' },
+    { key: 'slot', label: '2. Slot', hint: 'Pilih nomor slot (1-8)' },
+    { key: 'drawer', label: '3. Laci', hint: 'Scan QR Laci Emas' },
+    { key: 'item', label: '4. Emas', hint: 'Scan QR Keping Emas' },
   ];
   const stepIdx = steps.findIndex((s) => s.key === step);
 
-  const handleScan = async () => {
-    if (step !== 'item') {
-      const nextSteps = { cabinet: 'slot', slot: 'drawer', drawer: 'item' };
-      setStep(nextSteps[step]);
-      return;
+  // Enumerate video devices
+  const loadCameras = useCallback(async () => {
+    try {
+      if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === 'videoinput');
+        setCameras(videoInputs);
+        if (videoInputs.length > 0 && !selectedCameraId) {
+          setSelectedCameraId(videoInputs[0].deviceId);
+        }
+      }
+    } catch (err) {
+      console.warn('Error enumerating cameras:', err);
     }
+  }, [selectedCameraId]);
 
+  useEffect(() => {
+    loadCameras();
+  }, [loadCameras]);
+
+  // Stop camera stream & scan loop
+  const stopCamera = useCallback(() => {
+    isScanningRef.current = false;
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setCameraActive(false);
+  }, []);
+
+  // Continuous frame scanning with jsQR
+  const startScanLoop = useCallback(() => {
+    isScanningRef.current = true;
+
+    const scanFrame = () => {
+      if (!isScanningRef.current) return;
+
+      const video = videoRef.current;
+      if (video && video.readyState >= 2 && video.videoWidth > 0 && video.videoHeight > 0) {
+        if (!canvasRef.current) {
+          canvasRef.current = document.createElement('canvas');
+        }
+        const canvas = canvasRef.current;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: 'dontInvert',
+          });
+
+          if (code && code.data && code.data.trim()) {
+            isScanningRef.current = false; // pause scanning
+            handleQrScanned(code.data.trim());
+            return;
+          }
+        }
+      }
+
+      animFrameRef.current = requestAnimationFrame(scanFrame);
+    };
+
+    animFrameRef.current = requestAnimationFrame(scanFrame);
+  }, []);
+
+  // Start native camera stream
+  const startCamera = useCallback(async (deviceId) => {
+    try {
+      setCameraError('');
+      stopCamera();
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Browser Anda tidak mendukung WebRTC Camera. Silakan gunakan input manual.');
+        return;
+      }
+
+      const activeDeviceId = deviceId || selectedCameraId;
+      const constraints = {
+        video: activeDeviceId
+          ? { deviceId: { exact: activeDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      };
+
+      let stream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+      } catch (err) {
+        // Fallback to basic video constraint
+        console.warn('Specific constraint failed, trying basic { video: true }', err);
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+
+      streamRef.current = stream;
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.setAttribute('playsinline', 'true');
+        await videoRef.current.play();
+        setCameraActive(true);
+        startScanLoop();
+      }
+    } catch (err) {
+      console.error('Camera access error:', err);
+      setCameraError('Kamera tidak dapat diakses atau izin ditolak. Pastikan izin kamera aktif di browser.');
+      setCameraActive(false);
+    }
+  }, [selectedCameraId, stopCamera, startScanLoop]);
+
+  // Clean up camera on unmount
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, [stopCamera]);
+
+  // When step changes, if camera is active, resume scanning loop
+  useEffect(() => {
+    if (cameraActive && step !== 'slot' && !isScanningRef.current) {
+      startScanLoop();
+    }
+  }, [step, cameraActive, startScanLoop]);
+
+  // Verify step with backend and advance
+  const verifyAndAdvance = async (stepKey, value) => {
     setLoading(true);
     try {
-      const res = await apiRequest(`/ho/orders/${po.id}/scan-item`, {
-        method: 'PATCH',
-        body: JSON.stringify({ cabinetQr, slotNumber: Number(slotNumber), drawerQr, itemQr }),
+      const payload = {
+        step: stepKey,
+        cabinetQr: stepKey === 'cabinet' ? value : cabinetQr,
+        slotNumber: stepKey === 'slot' ? Number(value) : Number(slotNumber),
+        drawerQr: stepKey === 'drawer' ? value : drawerQr,
+        itemQr: stepKey === 'item' ? value : itemQr,
+      };
+
+      const res = await apiRequest(`/ho/orders/${po.id}/verify-step`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
       });
-      toast.success(res.message || 'Item berhasil ditambahkan ke picking list');
-      onItemAdded(res.data);
-      // Reset for next scan
-      setStep('cabinet'); setCabinetQr(''); setSlotNumber(''); setDrawerQr(''); setItemQr('');
+
+      if (!res.success) throw new Error(res.message);
+
+      // Store verified location feedback
+      setVerifiedInfo((prev) => ({
+        ...prev,
+        [stepKey]: res.data,
+      }));
+
+      toast.success(res.data.locationName ? `✓ ${res.data.locationName}` : res.message);
+
+      // Advance sequentially
+      if (stepKey === 'cabinet') {
+        setCabinetQr(value);
+        setStep('slot');
+      } else if (stepKey === 'slot') {
+        setSlotNumber(Number(value));
+        setStep('drawer');
+      } else if (stepKey === 'drawer') {
+        setDrawerQr(value);
+        setStep('item');
+      } else if (stepKey === 'item') {
+        setItemQr(value);
+        // Step 4 final: execute actual item picking allocation
+        await completeItemPicking(cabinetQr, slotNumber, drawerQr, value);
+      }
     } catch (err) {
-      toast.error(err.message || 'Gagal scan item');
+      toast.error(err.message || 'Verifikasi gagal. Pastikan QR sesuai.');
+      // Resume scanning on error
+      if (cameraActive && stepKey !== 'slot') {
+        setTimeout(() => {
+          if (!isScanningRef.current) startScanLoop();
+        }, 1500);
+      }
     } finally {
       setLoading(false);
     }
   };
 
+  const completeItemPicking = async (cab, slt, drw, itm) => {
+    try {
+      const res = await apiRequest(`/ho/orders/${po.id}/scan-item`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          cabinetQr: cab,
+          slotNumber: Number(slt),
+          drawerQr: drw,
+          itemQr: itm,
+        }),
+      });
+
+      stopCamera();
+
+      Swal.fire({
+        title: 'Berhasil Dipicking!',
+        text: `${res.data.item.brand} ${res.data.item.weight}g dari ${res.data.location} berhasil dialokasikan ke PO`,
+        icon: 'success',
+        confirmButtonColor: '#059669',
+        confirmButtonText: 'Lanjut Scan Item Berikutnya',
+        showCancelButton: true,
+        cancelButtonText: 'Selesai Picking',
+      }).then((result) => {
+        onItemAdded(res.data);
+        if (result.isConfirmed) {
+          setStep('cabinet');
+          setCabinetQr('');
+          setSlotNumber('');
+          setDrawerQr('');
+          setItemQr('');
+          setVerifiedInfo({ cabinet: null, slot: null, drawer: null, item: null });
+        } else {
+          onClose();
+        }
+      });
+    } catch (err) {
+      toast.error(err.message || 'Gagal menyimpan picking item');
+    }
+  };
+
+  const handleQrScanned = async (code) => {
+    if (loading || !code) return;
+    if (step === 'cabinet') {
+      await verifyAndAdvance('cabinet', code);
+    } else if (step === 'drawer') {
+      await verifyAndAdvance('drawer', code);
+    } else if (step === 'item') {
+      await verifyAndAdvance('item', code);
+    }
+  };
+
+  const handleManualSubmit = async () => {
+    if (!manualInput.trim()) return;
+    const val = manualInput.trim();
+    setManualInput('');
+    if (step === 'cabinet') {
+      await verifyAndAdvance('cabinet', val);
+    } else if (step === 'slot') {
+      await verifyAndAdvance('slot', val);
+    } else if (step === 'drawer') {
+      await verifyAndAdvance('drawer', val);
+    } else if (step === 'item') {
+      await verifyAndAdvance('item', val);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-        <div className="flex items-center justify-between p-5 border-b border-slate-100">
-          <h2 className="text-base font-semibold text-slate-800">Scan Item Emas</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl font-bold">×</button>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[94vh] flex flex-col overflow-hidden border border-slate-100">
+        {/* Header */}
+        <div className="flex items-center justify-between p-5 border-b border-slate-100 bg-slate-50">
+          <div>
+            <h2 className="text-base font-semibold text-slate-800 flex items-center gap-2">
+              <Camera size={18} className="text-emerald-700" />
+              Scan & Verifikasi Lokasi Fisik Emas
+            </h2>
+            <p className="text-xs text-slate-500 mt-0.5">PO: {po.id}</p>
+          </div>
+          <button
+            onClick={() => { stopCamera(); onClose(); }}
+            className="text-slate-400 hover:text-slate-600 text-xl font-bold p-1"
+          >
+            ×
+          </button>
         </div>
-        <div className="p-5 space-y-5">
-          {/* Step indicator */}
-          <div className="flex items-center gap-1">
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Step Breadcrumbs */}
+          <div className="grid grid-cols-4 gap-1.5 bg-slate-100 p-1.5 rounded-xl text-center">
             {steps.map((s, i) => (
-              <div key={s.key} className="flex items-center gap-1 flex-1">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-                  i < stepIdx ? 'bg-emerald-600 text-white' : i === stepIdx ? 'bg-emerald-700 text-white ring-2 ring-emerald-200' : 'bg-slate-100 text-slate-400'
-                }`}>{i + 1}</div>
-                {i < steps.length - 1 && <div className={`flex-1 h-0.5 ${i < stepIdx ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
+              <div
+                key={s.key}
+                className={`py-1.5 px-2 rounded-lg text-xs font-semibold transition-all ${i === stepIdx
+                  ? 'bg-emerald-700 text-white shadow-sm'
+                  : i < stepIdx
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'text-slate-400'
+                  }`}
+              >
+                {i < stepIdx ? '✓ ' : ''}{s.label}
               </div>
             ))}
           </div>
 
-          {/* Current step */}
-          <div className="bg-slate-50 rounded-xl p-4">
-            <p className="text-xs text-slate-500 mb-1">{steps[stepIdx]?.hint}</p>
-            <p className="text-sm font-semibold text-slate-700 mb-3">{steps[stepIdx]?.label}</p>
-            {step === 'cabinet' && (
-              <input
-                value={cabinetQr}
-                onChange={(e) => setCabinetQr(e.target.value)}
-                placeholder="QR Code Lemari (e.g. QR-CAB-HO-01)"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                autoFocus
-              />
+          {/* Location Verification Status Banners */}
+          <div className="space-y-2">
+            {verifiedInfo.cabinet && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-semibold text-emerald-800">{verifiedInfo.cabinet.locationName}</p>
+                  <p className="text-emerald-600 text-[11px] mt-0.5">{verifiedInfo.cabinet.details}</p>
+                </div>
+              </div>
             )}
-            {step === 'slot' && (
-              <input
-                type="number"
-                min={1}
-                max={8}
-                value={slotNumber}
-                onChange={(e) => setSlotNumber(e.target.value)}
-                placeholder="Nomor slot (1-8)"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                autoFocus
-              />
+            {verifiedInfo.slot && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-semibold text-emerald-800">{verifiedInfo.slot.locationName}</p>
+                  <p className="text-emerald-600 text-[11px] mt-0.5">{verifiedInfo.slot.details}</p>
+                </div>
+              </div>
             )}
-            {step === 'drawer' && (
-              <input
-                value={drawerQr}
-                onChange={(e) => setDrawerQr(e.target.value)}
-                placeholder="QR Code Laci"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                autoFocus
-              />
-            )}
-            {step === 'item' && (
-              <input
-                value={itemQr}
-                onChange={(e) => setItemQr(e.target.value)}
-                placeholder="QR Code Emas"
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                autoFocus
-              />
+            {verifiedInfo.drawer && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-xs text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 size={16} className="text-emerald-600 mt-0.5 shrink-0" />
+                <div className="flex-1">
+                  <p className="font-semibold text-emerald-800">{verifiedInfo.drawer.locationName}</p>
+                  <p className="text-emerald-600 text-[11px] mt-0.5">{verifiedInfo.drawer.details}</p>
+                </div>
+              </div>
             )}
           </div>
 
-          {/* Scan summary */}
-          {(cabinetQr || slotNumber || drawerQr) && (
-            <div className="text-xs text-slate-500 space-y-1 bg-slate-50 rounded-lg p-3">
-              {cabinetQr && <div>🗄 Lemari: <span className="font-medium text-slate-700">{cabinetQr}</span></div>}
-              {slotNumber && <div>🔢 Slot: <span className="font-medium text-slate-700">{slotNumber}</span></div>}
-              {drawerQr && <div>📦 Laci: <span className="font-medium text-slate-700">{drawerQr}</span></div>}
+          {/* Current Step Instruction & Controls */}
+          <div className="border border-slate-200 rounded-xl p-4 bg-white shadow-xs">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                  Tahap {stepIdx + 1} dari 4
+                </span>
+                <h3 className="text-sm font-bold text-slate-800 mt-1">{steps[stepIdx].label}: {steps[stepIdx].hint}</h3>
+              </div>
+              {step !== 'slot' && (
+                <button
+                  type="button"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors shadow-xs ${cameraActive
+                    ? 'bg-red-50 text-red-600 border border-red-200 hover:bg-red-100'
+                    : 'bg-emerald-700 text-white hover:bg-emerald-800'
+                    }`}
+                >
+                  {cameraActive ? <><CameraOff size={14} /> Tutup Kamera</> : <><Camera size={14} /> Buka Kamera</>}
+                </button>
+              )}
             </div>
-          )}
 
-          <div className="flex gap-2">
-            {stepIdx > 0 && (
-              <button onClick={() => setStep(steps[stepIdx - 1].key)} className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl text-sm font-medium hover:bg-slate-50">
-                Kembali
-              </button>
+            {/* Camera Viewport with Native HTML5 Video */}
+            {step !== 'slot' && (
+              <div className="mb-3 space-y-2">
+                <div
+                  className={`relative w-full aspect-4/3 bg-slate-900 rounded-xl overflow-hidden border-2 transition-all ${cameraActive ? 'border-emerald-500 shadow-md block' : 'border-slate-200 hidden'
+                    }`}
+                >
+                  {/* Real video feed */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full h-full object-cover"
+                  />
+
+                  {/* Viewfinder Target Reticle Overlay */}
+                  {cameraActive && (
+                    <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                      <div className="w-48 h-48 border-2 border-emerald-400/80 rounded-2xl relative shadow-[0_0_0_9999px_rgba(0,0,0,0.45)]">
+                        {/* Corner Accents */}
+                        <div className="absolute -top-1 -left-1 w-5 h-5 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg" />
+                        <div className="absolute -top-1 -right-1 w-5 h-5 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg" />
+                        <div className="absolute -bottom-1 -left-1 w-5 h-5 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg" />
+                        <div className="absolute -bottom-1 -right-1 w-5 h-5 border-b-4 border-r-4 border-emerald-400 rounded-br-lg" />
+                        {/* Animated Laser Scanning Line */}
+                        <div className="w-full h-0.5 bg-emerald-400 shadow-[0_0_8px_#34d399] absolute top-1/2 -translate-y-1/2 animate-pulse" />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Camera selector if multiple cameras detected */}
+                {cameraActive && cameras.length > 1 && (
+                  <div className="flex items-center gap-2 text-xs text-slate-500">
+                    <span>Kamera:</span>
+                    <select
+                      value={selectedCameraId}
+                      onChange={(e) => {
+                        setSelectedCameraId(e.target.value);
+                        startCamera(e.target.value);
+                      }}
+                      className="text-xs border border-slate-200 rounded-lg px-2 py-1 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    >
+                      {cameras.map((cam, idx) => (
+                        <option key={cam.deviceId || idx} value={cam.deviceId}>
+                          {cam.label || `Kamera ${idx + 1}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                {cameraActive && (
+                  <p className="text-center text-xs text-emerald-700 font-medium animate-pulse">
+                    🟢 Arahkan kamera tepat ke QR Code {steps[stepIdx].label.split('.')[1]}...
+                  </p>
+                )}
+
+                {cameraError && (
+                  <div className="bg-amber-50 text-amber-800 text-xs p-2.5 rounded-lg flex items-center gap-1.5 border border-amber-200">
+                    <AlertTriangle size={14} className="shrink-0" />
+                    <span>{cameraError}</span>
+                  </div>
+                )}
+              </div>
             )}
-            <button
-              onClick={handleScan}
-              disabled={loading || (step === 'cabinet' && !cabinetQr) || (step === 'slot' && !slotNumber) || (step === 'drawer' && !drawerQr) || (step === 'item' && !itemQr)}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-emerald-700 text-white rounded-xl text-sm font-medium hover:bg-emerald-800 disabled:opacity-60"
-            >
-              {loading && <Loader2 size={14} className="animate-spin" />}
-              {step === 'item' ? 'Tambahkan Item' : 'Lanjut →'}
-            </button>
+
+            {/* Step 2: Slot Selection Buttons */}
+            {step === 'slot' && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500">Pilih nomor slot tempat laci berada (Lemari: <span className="font-semibold text-slate-700">{cabinetQr}</span>):</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      disabled={loading}
+                      onClick={() => verifyAndAdvance('slot', s)}
+                      className={`p-3 rounded-xl border text-center transition-all ${slotNumber === s
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-800 font-bold'
+                        : 'border-slate-200 hover:border-emerald-500 hover:bg-slate-50 text-slate-700 font-medium'
+                        }`}
+                    >
+                      <Layers size={18} className="mx-auto mb-1 text-slate-400" />
+                      Slot {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Manual QR Input & Quick Sample Chips */}
+            {step !== 'slot' && (
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-medium text-slate-600">
+                    Atau ketik / tempel kode QR:
+                  </label>
+                  {/* Quick-test helper button */}
+                  <div className="flex gap-1">
+                    {step === 'cabinet' && (
+                      <button
+                        type="button"
+                        onClick={() => verifyAndAdvance('cabinet', 'QR-CAB-HO-01')}
+                        className="text-[11px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 px-2 py-0.5 rounded text-slate-600 font-mono transition-colors"
+                      >
+                        + HO-CAB-01
+                      </button>
+                    )}
+                    {step === 'drawer' && (
+                      <button
+                        type="button"
+                        onClick={() => verifyAndAdvance('drawer', 'QR-HO-CAB-01-SL01-BIG')}
+                        className="text-[11px] bg-slate-100 hover:bg-emerald-50 hover:text-emerald-700 px-2 py-0.5 rounded text-slate-600 font-mono transition-colors"
+                      >
+                        + Laci Slot 1
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={manualInput}
+                    onChange={(e) => setManualInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleManualSubmit(); }}
+                    placeholder={
+                      step === 'cabinet'
+                        ? 'Contoh: QR-CAB-HO-01'
+                        : step === 'drawer'
+                          ? 'Contoh: QR-HO-CAB-01-SL01-BIG'
+                          : 'Contoh: PGD-HO-GOLD:TEST-LM-5774|...'
+                    }
+                    className="flex-1 text-xs border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    disabled={loading || !manualInput.trim()}
+                    onClick={handleManualSubmit}
+                    className="px-3.5 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold hover:bg-slate-900 disabled:opacity-50 flex items-center gap-1 shadow-xs"
+                  >
+                    {loading ? <Loader2 size={13} className="animate-spin" /> : <ArrowRight size={13} />}
+                    Cek
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between p-4 border-t border-slate-100 bg-slate-50">
+          <button
+            type="button"
+            disabled={stepIdx === 0 || loading}
+            onClick={() => {
+              if (step === 'slot') setStep('cabinet');
+              else if (step === 'drawer') setStep('slot');
+              else if (step === 'item') setStep('drawer');
+            }}
+            className="flex items-center gap-1 px-3 py-1.5 text-xs text-slate-600 hover:text-slate-800 disabled:opacity-30"
+          >
+            ← Kembali ke tahap sebelumnya
+          </button>
+          <button
+            type="button"
+            onClick={() => { stopCamera(); onClose(); }}
+            className="px-4 py-1.5 text-xs font-medium border border-slate-200 rounded-lg text-slate-600 hover:bg-white"
+          >
+            Batal
+          </button>
         </div>
       </div>
     </div>
@@ -682,9 +1110,8 @@ export default function HoOrdersPage() {
               <button
                 key={f.value}
                 onClick={() => setFilterStatus(f.value)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  filterStatus === f.value ? 'bg-emerald-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${filterStatus === f.value ? 'bg-emerald-700 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
               >
                 {f.label}
               </button>
