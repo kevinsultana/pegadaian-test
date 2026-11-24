@@ -229,18 +229,21 @@ const scanItem = async (req, res) => {
     }
 
     // 7. Validasi apakah item sesuai dengan salah satu request line
-    const matchedLine = po.requestLines.find(
-      (line) => line.goldBrand === item.brand && line.weightGrams === item.weight
-    );
+    const matchedLine = po.requestLines.find((line) => {
+      const brandMatch =
+        line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
+        item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
+        line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+      return brandMatch && Number(line.weightGrams) === Number(item.weight);
+    });
     if (!matchedLine) {
-      return sendError(res, `Item (${item.brand} ${item.weight}g) tidak sesuai dengan permintaan PO ini`, 400);
+      return sendError(res, `Item (${item.brand} ${item.weight}g) tidak sesuai dengan spesifikasi permintaan PO ini`, 400);
     }
 
     // 8. Cek apakah masih butuh qty untuk line ini
-    const pickedForLine = po.items.filter((pi) => {
-      // We'll check by joining with item data - simplified approach
-      return true; // will be validated via qtyFulfilled
-    });
+    if (matchedLine.qtyFulfilled >= matchedLine.qtyRequested) {
+      return sendError(res, `Permintaan untuk ${matchedLine.goldBrand} ${matchedLine.weightGrams}g sudah terpenuhi (${matchedLine.qtyFulfilled}/${matchedLine.qtyRequested})`, 400);
+    }
 
     // 9. Tambahkan item ke PO & lock status
     await prisma.$transaction([
@@ -288,9 +291,13 @@ const removePickedItem = async (req, res) => {
     if (!item) return sendError(res, 'Item tidak ditemukan', 404);
 
     // Find matched line
-    const matchedLine = po.requestLines.find(
-      (line) => line.goldBrand === item.brand && line.weightGrams === item.weight
-    );
+    const matchedLine = po.requestLines.find((line) => {
+      const brandMatch =
+        line.goldBrand.toUpperCase() === item.brand.toUpperCase() ||
+        item.brand.toUpperCase().includes(line.goldBrand.toUpperCase()) ||
+        line.goldBrand.toUpperCase().includes(item.brand.toUpperCase());
+      return brandMatch && Number(line.weightGrams) === Number(item.weight);
+    });
 
     await prisma.$transaction([
       prisma.pOItem.deleteMany({ where: { poId: id, itemId } }),

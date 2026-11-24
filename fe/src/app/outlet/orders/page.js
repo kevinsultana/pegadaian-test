@@ -1,6 +1,8 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { useAuth } from '@/context/AuthContext';
+import { apiRequest } from '@/lib/api';
 import {
   ShoppingCart, Plus, ChevronRight, FileText, Clock, CheckCircle,
   XCircle, Truck, Package, AlertCircle, Trash2, Send, Eye,
@@ -8,8 +10,6 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import Swal from 'sweetalert2';
-
-const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
 
 const STATUS_CONFIG = {
   DRAFT: { label: 'Draft', color: 'bg-slate-100 text-slate-600', icon: FileText },
@@ -39,7 +39,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function CreatePoModal({ onClose, onCreated, token }) {
+function CreatePoModal({ onClose, onCreated }) {
   const [notes, setNotes] = useState('');
   const [lines, setLines] = useState([{ goldBrand: 'ANTAM', weightGrams: 10, qtyRequested: 1, notes: '' }]);
   const [loading, setLoading] = useState(false);
@@ -56,17 +56,14 @@ function CreatePoModal({ onClose, onCreated, token }) {
     if (lines.length === 0) return toast.error('Tambahkan minimal 1 item');
     setLoading(true);
     try {
-      const res = await fetch(`${API}/outlet/orders`, {
+      const res = await apiRequest('/outlet/orders', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ notes, requestLines: lines }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Gagal membuat PO');
-      toast.success('Draft PO berhasil dibuat');
-      onCreated(data.data);
+      toast.success(res.message || 'Draft PO berhasil dibuat');
+      onCreated(res.data);
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message || 'Gagal membuat PO');
     } finally {
       setLoading(false);
     }
@@ -80,7 +77,6 @@ function CreatePoModal({ onClose, onCreated, token }) {
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl font-bold">×</button>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {/* Request Lines */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <label className="text-sm font-medium text-slate-700">Daftar Permintaan Emas</label>
@@ -130,7 +126,6 @@ function CreatePoModal({ onClose, onCreated, token }) {
               ))}
             </div>
           </div>
-          {/* Notes */}
           <div>
             <label className="text-sm font-medium text-slate-700 block mb-1">Catatan (opsional)</label>
             <textarea
@@ -156,37 +151,33 @@ function CreatePoModal({ onClose, onCreated, token }) {
   );
 }
 
-function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
+function PoDetailModal({ po, onClose, onRefresh, userRole }) {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState(po);
 
   const fetchDetail = useCallback(async () => {
     try {
-      const res = await fetch(`${API}/outlet/orders/${po.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok) setDetail(data.data);
-    } catch {}
-  }, [po.id, token]);
+      const res = await apiRequest(`/outlet/orders/${po.id}`);
+      if (res && res.data) setDetail(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [po.id]);
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
 
   const action = async (endpoint, method = 'PATCH', body = {}, successMsg) => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/outlet/orders/${po.id}/${endpoint}`, {
+      const res = await apiRequest(`/outlet/orders/${po.id}/${endpoint}`, {
         method,
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Gagal');
-      toast.success(successMsg || data.message);
+      toast.success(successMsg || res.message || 'Berhasil');
       onRefresh();
       fetchDetail();
     } catch (err) {
-      toast.error(err.message);
+      toast.error(err.message || 'Gagal memproses aksi');
     } finally {
       setLoading(false);
     }
@@ -208,6 +199,7 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
 
   const totalQty = detail.requestLines?.reduce((s, l) => s + l.qtyRequested, 0) || 0;
   const totalFulfilled = detail.requestLines?.reduce((s, l) => s + l.qtyFulfilled, 0) || 0;
+  const isOutletSupervisor = userRole === 'OUTLET_SUPERVISOR' || userRole === 'SUPER_ADMIN';
 
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -220,7 +212,6 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl font-bold">×</button>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
-          {/* Info */}
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div><span className="text-slate-500">Dibuat oleh:</span><span className="ml-2 font-medium text-slate-700">{detail.requestedBy}</span></div>
             <div><span className="text-slate-500">Tanggal:</span><span className="ml-2 font-medium text-slate-700">{new Date(detail.createdAt).toLocaleDateString('id-ID')}</span></div>
@@ -231,7 +222,6 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
             {detail.trackingNumber && <div className="col-span-2"><span className="text-slate-500">No. Surat Jalan:</span><span className="ml-2 font-medium text-emerald-700">{detail.trackingNumber}</span></div>}
           </div>
 
-          {/* Request Lines */}
           <div>
             <h3 className="text-sm font-semibold text-slate-700 mb-2">Permintaan Emas ({totalFulfilled}/{totalQty} terpenuhi)</h3>
             <div className="border border-slate-200 rounded-xl overflow-hidden">
@@ -262,7 +252,6 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
             </div>
           </div>
 
-          {/* Items picked */}
           {detail.items && detail.items.length > 0 && (
             <div>
               <h3 className="text-sm font-semibold text-slate-700 mb-2">Item Dikirim ({detail.items.length} keping)</h3>
@@ -298,7 +287,6 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
           )}
         </div>
 
-        {/* Actions */}
         <div className="flex gap-2 p-6 border-t border-slate-100 flex-wrap">
           {detail.status === 'DRAFT' && (
             <button
@@ -309,7 +297,7 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
               <Send size={14} /> Submit ke SPV
             </button>
           )}
-          {detail.status === 'PENDING_OUTLET_SPV' && userRole === 'OUTLET_SUPERVISOR' && (
+          {detail.status === 'PENDING_OUTLET_SPV' && isOutletSupervisor && (
             <>
               <button
                 onClick={() => confirmAction('approve-outlet', 'Setujui dan kirim PO ini ke HO?', 'PO disetujui dan dikirim ke HO')}
@@ -346,46 +334,41 @@ function PoDetailModal({ po, onClose, onRefresh, token, userRole }) {
 }
 
 export default function OutletOrdersPage() {
+  const { user, loading: authLoading } = useAuth();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [selectedPo, setSelectedPo] = useState(null);
-  const [token, setToken] = useState('');
-  const [userRole, setUserRole] = useState('');
-
-  useEffect(() => {
-    const t = localStorage.getItem('token') || '';
-    const u = JSON.parse(localStorage.getItem('user') || '{}');
-    setToken(t);
-    setUserRole(u.role || '');
-  }, []);
 
   const fetchOrders = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
     try {
-      const qs = filterStatus ? `?status=${filterStatus}` : '';
-      const res = await fetch(`${API}/outlet/orders${qs}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (res.ok) setOrders(data.data?.orders || []);
+      setLoading(true);
+      const params = {};
+      if (filterStatus) params.status = filterStatus;
+      const res = await apiRequest('/outlet/orders', { params });
+      if (res && res.data) {
+        setOrders(res.data.orders || []);
+      }
     } catch (err) {
+      console.error(err);
       toast.error('Gagal memuat data PO');
     } finally {
       setLoading(false);
     }
-  }, [token, filterStatus]);
+  }, [filterStatus]);
 
-  useEffect(() => { fetchOrders(); }, [fetchOrders]);
+  useEffect(() => {
+    if (!authLoading) {
+      fetchOrders();
+    }
+  }, [fetchOrders, authLoading]);
 
   const statuses = ['', 'DRAFT', 'PENDING_OUTLET_SPV', 'SUBMITTED_TO_HO', 'APPROVED_HO', 'PICKING', 'DISPATCHED', 'PARTIAL_HOLD', 'RECEIVED', 'REJECTED'];
 
   return (
     <DashboardLayout>
       <div className="p-6 space-y-6">
-        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-slate-800">Request Emas ke HO</h1>
@@ -404,7 +387,6 @@ export default function OutletOrdersPage() {
           </div>
         </div>
 
-        {/* Filter */}
         <div className="flex gap-2 flex-wrap">
           {statuses.map((s) => {
             const cfg = s ? STATUS_CONFIG[s] : null;
@@ -424,7 +406,6 @@ export default function OutletOrdersPage() {
           })}
         </div>
 
-        {/* Table */}
         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
           {loading ? (
             <div className="flex items-center justify-center py-16 text-slate-400">
@@ -482,7 +463,6 @@ export default function OutletOrdersPage() {
 
       {showCreate && (
         <CreatePoModal
-          token={token}
           onClose={() => setShowCreate(false)}
           onCreated={(po) => { setShowCreate(false); fetchOrders(); setSelectedPo(po); }}
         />
@@ -490,8 +470,7 @@ export default function OutletOrdersPage() {
       {selectedPo && (
         <PoDetailModal
           po={selectedPo}
-          token={token}
-          userRole={userRole}
+          userRole={user?.role || ''}
           onClose={() => setSelectedPo(null)}
           onRefresh={fetchOrders}
         />

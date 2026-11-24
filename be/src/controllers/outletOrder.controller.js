@@ -17,7 +17,7 @@ const listOutletOrders = async (req, res) => {
     const user = req.user;
     const { status, page = 1, limit = 20 } = req.query;
 
-    const where = { destLocId: user.locationId };
+    const where = user.role === 'SUPER_ADMIN' ? {} : { destLocId: user.locationId };
     if (status) where.status = status;
 
     const [total, orders] = await Promise.all([
@@ -49,8 +49,9 @@ const getOutletOrderDetail = async (req, res) => {
     const { id } = req.params;
     const user = req.user;
 
+    const where = user.role === 'SUPER_ADMIN' ? { id } : { id, destLocId: user.locationId };
     const po = await prisma.purchaseOrder.findFirst({
-      where: { id, destLocId: user.locationId },
+      where,
       include: {
         sourceLocation: true,
         destLocation: true,
@@ -164,12 +165,13 @@ const approveByOutletSpv = async (req, res) => {
     const { id } = req.params;
     const user = req.user;
 
-    if (!['OUTLET_SUPERVISOR'].includes(user.role)) {
-      return sendError(res, 'Hanya Supervisor Outlet yang bisa approve', 403);
+    if (!['OUTLET_SUPERVISOR', 'SUPER_ADMIN'].includes(user.role)) {
+      return sendError(res, 'Hanya Supervisor Outlet atau Super Admin yang bisa approve', 403);
     }
 
+    const whereClause = user.role === 'SUPER_ADMIN' ? { id } : { id, destLocId: user.locationId };
     const po = await prisma.purchaseOrder.findFirst({
-      where: { id, destLocId: user.locationId },
+      where: whereClause,
     });
 
     if (!po) return sendError(res, 'PO tidak ditemukan', 404);
@@ -199,12 +201,13 @@ const rejectByOutletSpv = async (req, res) => {
     const { reason } = req.body;
     const user = req.user;
 
-    if (!['OUTLET_SUPERVISOR'].includes(user.role)) {
-      return sendError(res, 'Hanya Supervisor Outlet yang bisa reject', 403);
+    if (!['OUTLET_SUPERVISOR', 'SUPER_ADMIN'].includes(user.role)) {
+      return sendError(res, 'Hanya Supervisor Outlet atau Super Admin yang bisa reject', 403);
     }
 
+    const whereClause = user.role === 'SUPER_ADMIN' ? { id } : { id, destLocId: user.locationId };
     const po = await prisma.purchaseOrder.findFirst({
-      where: { id, destLocId: user.locationId },
+      where: whereClause,
     });
 
     if (!po) return sendError(res, 'PO tidak ditemukan', 404);
@@ -233,8 +236,9 @@ const receiveOrder = async (req, res) => {
     const { id } = req.params;
     const user = req.user;
 
+    const where = user.role === 'SUPER_ADMIN' ? { id } : { id, destLocId: user.locationId };
     const po = await prisma.purchaseOrder.findFirst({
-      where: { id, destLocId: user.locationId },
+      where,
       include: { items: true },
     });
 

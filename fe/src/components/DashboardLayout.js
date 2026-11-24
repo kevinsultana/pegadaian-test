@@ -69,6 +69,7 @@ export default function DashboardLayout({ children }) {
         ...((isSuperAdmin || hasPerm('DASHBOARD_HO') || isHO) ? [{ name: 'Dashboard Vault HO', href: '/ho/dashboard', icon: Building2 }] : []),
         ...((isSuperAdmin || hasPerm('HO_CABINETS') || isHO) ? [{ name: 'Lemari & Slot Modular', href: '/ho/cabinets', icon: Layers }] : []),
         ...((isSuperAdmin || hasPerm('HO_INVENTORY') || isHO) ? [{ name: 'Inventori & QR Emas', href: '/ho/inventory', icon: QrCode }] : []),
+        ...((isSuperAdmin || hasPerm('HO_ORDERS') || isHO) ? [{ name: 'PO & Picking Emas', href: '/ho/orders', icon: ShoppingCart }] : []),
       ],
     },
 
@@ -77,6 +78,7 @@ export default function DashboardLayout({ children }) {
       title: 'OUTLET / CABANG',
       items: [
         ...((isSuperAdmin || hasPerm('DASHBOARD_OUTLET') || !isHO) ? [{ name: 'Dashboard Outlet Hub', href: '/outlet/dashboard', icon: Radio }] : []),
+        ...((isSuperAdmin || hasPerm('OUTLET_ORDERS') || (!isHO && user?.role !== 'SPI_AUDITOR')) ? [{ name: 'Request Emas ke HO', href: '/outlet/orders', icon: ShoppingCart }] : []),
       ],
     },
 
